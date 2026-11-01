@@ -490,11 +490,17 @@ public:
                 error = cancelled();
                 return false;
             }
-            archive_read_data_skip(a.get());
+            if (archive_read_data_skip(a.get()) < ARCHIVE_WARN) {
+                status = ARCHIVE_FATAL;  // the data cannot be passed over
+                break;
+            }
         }
         if (status != ARCHIVE_EOF) {
+            // Not read to the end (damaged, or a format libarchive reads only
+            // in part, e.g. solid RAR 1.5): a failure, so that the caller can
+            // try another reader; the entries read so far stay in `items`.
             error = errorOf(a.get());
-            return !items.isEmpty();
+            return false;
         }
         return true;
     }

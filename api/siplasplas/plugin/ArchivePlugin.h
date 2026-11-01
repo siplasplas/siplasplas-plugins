@@ -87,7 +87,8 @@ public:
 
     // All entries of the archive, in the archive's order. False with `error`
     // set when it cannot be read (not an archive, unsupported format or
-    // encryption, damaged); a damaged end still gives the entries read before.
+    // encryption, damaged, or read only in part as solid RAR 1.5); the
+    // entries read before stay in `items` then.
     virtual bool list(const QString& archivePath, QList<ArchiveItem>& items, QString& error,
                       const ArchiveProgress& progress = {}, const ArchivePassword& password = {}) = 0;
 

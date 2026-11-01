@@ -151,6 +151,27 @@ TEST(ArchivePluginTest, ReadsTheStartOfAnEntry)
     EXPECT_FALSE(error.isEmpty());
 }
 
+TEST(ArchivePluginTest, ListingThatBreaksOffFails)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("cut.tar");
+    QByteArray big(100 * 1000, 'x');
+    ASSERT_TRUE(writeArchive(path, "pax", "none", {{"a.txt", "aaa", false, {}}, {"big.bin", big, false, {}},
+                                                   {"z.txt", "zzz", false, {}}}));
+    // Cut in the middle of big.bin: z.txt cannot be reached.
+    QFile file(path);
+    ASSERT_TRUE(file.resize(50 * 1000));
+
+    QList<spp::ArchiveItem> items;
+    QString error;
+    EXPECT_FALSE(plugin()->list(path, items, error));
+    EXPECT_FALSE(error.isEmpty());
+    // What was read before stays.
+    ASSERT_GE(items.size(), 1);
+    EXPECT_EQ(items[0].path, "a.txt");
+}
+
 TEST(ArchivePluginTest, CancelsListing)
 {
     ASSERT_NE(plugin(), nullptr);

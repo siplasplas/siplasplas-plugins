@@ -12,6 +12,7 @@
 #include <qce/WordBoundary.h>
 
 #include <QCursor>
+#include <QGuiApplication>
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -81,6 +82,7 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
     connect(m_edit->area(), &qce::CodeEditArea::textChanged, this, [this] {
         m_marks.clear();
         m_linkShown = false;
+        m_query = {};  // an answer was for the text before
         if (m_listener) m_listener->textChanged();
     });
     // The messages of the marks under the mouse, and the word under it as a
@@ -257,15 +259,53 @@ bool EditorWidget::linkAt(const QPoint& viewportPoint, TextPosition* start, Text
 
 void EditorWidget::showLink(const QPoint& viewportPoint, bool ctrl)
 {
-    TextPosition start;
-    TextPosition end;
-    if (!ctrl || !linkAt(viewportPoint, &start, &end)) {
-        hideLink();
+    if (!ctrl) {
+        hideLink();  // the answer for the word stays, for Ctrl pressed again
         return;
     }
+    TextPosition start;
+    TextPosition end;
+    if (!linkAt(viewportPoint, &start, &end)) {
+        hideLink();
+        m_query = {};
+        return;
+    }
+    if (m_query.asked && m_query.start.line == start.line && m_query.start.column == start.column) {
+        if (m_query.isLink) displayLink();
+        return;
+    }
+    // Another word: the listener tells whether it is a link.
+    hideLink();
+    m_query = {true, false, start, end};
+    const qce::TextCursor at = m_edit->area()->cursorAt(viewportPoint);
+    const int column = std::clamp(at.column, start.column, end.column - 1);
+    m_querying = true;
+    if (m_listener) m_listener->linkQueried({at.line, column});
+    m_querying = false;
+    // Answered at once: Ctrl is held over the word right now.
+    if (m_query.isLink) displayLink();
+}
+
+void EditorWidget::answerLink(TextPosition position, bool isLink)
+{
+    // For the word still asked about only.
+    if (!m_query.asked || position.line != m_query.start.line || position.column < m_query.start.column
+        || position.column >= m_query.end.column)
+        return;
+    m_query.isLink = isLink;
+    if (m_querying) return;  // showLink() shows it
+    // Answered later: if Ctrl is still held over the word.
+    QWidget* viewport = m_edit->area()->viewport();
+    if (isLink && (QGuiApplication::queryKeyboardModifiers() & Qt::ControlModifier) && viewport->underMouse())
+        displayLink();
+}
+
+void EditorWidget::displayLink()
+{
     // Blue, with a straight line under it, as a link.
     const QColor blue(0x1a, 0x5f, 0xd6);
-    qce::ExtraSelection link{{start.line, start.column}, {end.line, end.column}, {}, blue, blue};
+    qce::ExtraSelection link{{m_query.start.line, m_query.start.column}, {m_query.end.line, m_query.end.column},
+                             {}, blue, blue};
     link.straightUnderline = true;
     m_edit->area()->setExtraSelections(LinkLayer, {link});
     m_edit->area()->viewport()->setCursor(Qt::PointingHandCursor);
@@ -295,18 +335,24 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
             const auto* mouse = static_cast<QMouseEvent*>(event);
             TextPosition start;
             TextPosition end;
-            if (mouse->button() == Qt::LeftButton && (mouse->modifiers() & Qt::ControlModifier)
-                && linkAt(mouse->position().toPoint(), &start, &end)) {
-                // Ctrl+click follows the link: the cursor goes there first.
+            // Ctrl+click on a word shown as a link follows it, the cursor going
+            // there first; elsewhere it is an ordinary click.
+            if (mouse->button() == Qt::LeftButton && (mouse->modifiers() & Qt::ControlModifier) && m_linkShown
+                && linkAt(mouse->position().toPoint(), &start, &end) && start.line == m_query.start.line
+                && start.column == m_query.start.column) {
                 const qce::TextCursor at = m_edit->area()->cursorAt(mouse->position().toPoint());
                 hideLink();
+                m_query = {};
                 m_edit->area()->setCursorPosition(at);
                 if (m_listener) m_listener->linkActivated({at.line, at.column});
                 return true;
             }
             break;
         }
-        case QEvent::Leave: hideLink(); break;
+        case QEvent::Leave:
+            hideLink();
+            m_query = {};
+            break;
         default: break;
         }
     } else if (watched == m_edit->area()

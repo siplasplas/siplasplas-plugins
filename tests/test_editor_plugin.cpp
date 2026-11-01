@@ -66,7 +66,16 @@ struct Listener : spp::EditorViewListener {
     spp::TextPosition cursor{-1, -1};
     int textChanges = 0;
     QList<spp::TextPosition> links;
+    QList<spp::TextPosition> queries;
+    // Answers link queries: a link before this column, none after it.
+    spp::EditorView* view = nullptr;
+    int linksBefore = 0;
     void textChanged() override { ++textChanges; }
+    void linkQueried(spp::TextPosition position) override
+    {
+        queries << position;
+        if (view) view->answerLink(position, position.column < linksBefore);
+    }
     void linkActivated(spp::TextPosition position) override { links << position; }
     void modificationChanged(bool value) override { modified << value; }
     void cursorMoved(spp::TextPosition position) override { cursor = position; }
@@ -217,30 +226,50 @@ TEST(EditorPlugin, MarksShowTheirMessages)
     view->setListener(nullptr);
 }
 
-// With Ctrl the word under the mouse is a link (a pointing hand); Ctrl+click
-// on it tells the listener, a plain click does not.
+// With Ctrl the word under the mouse is asked about; the one the listener
+// calls a link shows as one (a pointing hand), the other does not. Ctrl+click
+// on the link tells the listener; on no link, and a plain click, does not.
 TEST(EditorPlugin, CtrlClickFollowsALink)
 {
     QTemporaryDir dir;
-    const QString path = write(dir, "link.cpp", "answer();\n");
+    const QString path = write(dir, "link.cpp", "answer(); // note\n");
     spp::EditorView* view = plugin()->createEditor();
     const auto owner = editorWidget(view);
     view->widget()->resize(600, 300);
     view->widget()->show();
     ASSERT_EQ(view->open(path), spp::EditorResult::Ok);
     Listener listener;
+    listener.view = view;
+    listener.linksBefore = 6;  // "answer" is a link, "note" none
     view->setListener(&listener);
-    QWidget* viewport = view->widget()->findChild<QAbstractScrollArea*>()->viewport();
+    auto* area = view->widget()->findChild<QAbstractScrollArea*>();
+    QWidget* viewport = area->viewport();
     const QPoint onWord(4, 4);
+    const int charWidth = area->fontMetrics().horizontalAdvance(QLatin1Char('x'));
+    const QPoint onComment(4 + 14 * charWidth, 4);
+    auto move = [&](const QPoint& at, Qt::KeyboardModifiers modifiers) {
+        QMouseEvent event(QEvent::MouseMove, at, viewport->mapToGlobal(at), Qt::NoButton, Qt::NoButton, modifiers);
+        QCoreApplication::sendEvent(viewport, &event);
+    };
 
-    QMouseEvent plainMove(QEvent::MouseMove, onWord, viewport->mapToGlobal(onWord), Qt::NoButton, Qt::NoButton,
-                          Qt::NoModifier);
-    QCoreApplication::sendEvent(viewport, &plainMove);
+    move(onWord, Qt::NoModifier);
     EXPECT_NE(viewport->cursor().shape(), Qt::PointingHandCursor);
-    QMouseEvent ctrlMove(QEvent::MouseMove, onWord, viewport->mapToGlobal(onWord), Qt::NoButton, Qt::NoButton,
-                         Qt::ControlModifier);
-    QCoreApplication::sendEvent(viewport, &ctrlMove);
+    EXPECT_TRUE(listener.queries.isEmpty());
+    move(onComment, Qt::ControlModifier);
+    ASSERT_EQ(listener.queries.size(), 1);
+    EXPECT_GE(listener.queries.last().column, 13);
+    EXPECT_NE(viewport->cursor().shape(), Qt::PointingHandCursor);
+    QMouseEvent ctrlClickComment(QEvent::MouseButtonPress, onComment, viewport->mapToGlobal(onComment),
+                                 Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    QCoreApplication::sendEvent(viewport, &ctrlClickComment);
+    EXPECT_TRUE(listener.links.isEmpty());
+
+    move(onWord, Qt::ControlModifier);
+    EXPECT_EQ(listener.queries.size(), 2);
     EXPECT_EQ(viewport->cursor().shape(), Qt::PointingHandCursor);
+    // The same word again: no new question.
+    move(onWord + QPoint(1, 0), Qt::ControlModifier);
+    EXPECT_EQ(listener.queries.size(), 2);
 
     QMouseEvent plainClick(QEvent::MouseButtonPress, onWord, viewport->mapToGlobal(onWord), Qt::LeftButton,
                            Qt::LeftButton, Qt::NoModifier);

@@ -53,6 +53,7 @@ public:
     void setCursorPosition(TextPosition position) override;
     QString text() const override;
     void setMarks(const QList<TextMark>& marks) override;
+    void answerLink(TextPosition position, bool isLink) override;
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
 
@@ -66,6 +67,7 @@ private:
     // there is no word there. linkAt() only finds it.
     bool linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const;
     void showLink(const QPoint& viewportPoint, bool ctrl);
+    void displayLink();
     void hideLink();
 
     qce::SimpleTextDocument* m_document = nullptr;
@@ -80,6 +82,14 @@ private:
     // The marks underlined now (an edit clears them), for their tooltips.
     QList<TextMark> m_marks;
     bool m_linkShown = false;
+    // The word under the mouse asked about with Ctrl held, and the answer.
+    struct LinkQuery {
+        bool asked = false;
+        bool isLink = false;
+        TextPosition start;
+        TextPosition end;
+    } m_query;
+    bool m_querying = false;  // in the listener's linkQueried()
 };
 
 } // namespace spp

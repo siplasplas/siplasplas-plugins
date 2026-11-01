@@ -81,11 +81,16 @@ the mouse rests on them, e.g. a language server's diagnostics. The marks
 replace those set before, and an edit removes them until they are set again
 for the new text.
 
-With Ctrl held, the word under the mouse looks like a link — blue, with a
-straight blue line under it — and the mouse pointer becomes a pointing hand
-(also when Ctrl is pressed or let go while the mouse rests). A Ctrl+click on
-it puts the cursor there and tells the listener (`linkActivated()`), e.g.
-for Go to Definition.
+With Ctrl held over a word, the editor asks the listener whether it is a
+link (`linkQueried()`, e.g. whether a language server knows its
+definition); the answer (`answerLink()`, at once or later) makes it look
+like one — blue, with a straight blue line under it, under a pointing hand —
+while Ctrl is held over it (also when Ctrl is pressed or let go while the
+mouse rests). Each word is asked about once until the mouse leaves it or the
+text changes; unanswered, a word is no link, so comments and the like stay
+as they are. A Ctrl+click on a link puts the cursor there and tells the
+listener (`linkActivated()`), e.g. for Go to Definition; on anything else it
+is an ordinary click.
 
 Encoding detection reads cpg's language models, installed next to the plugin
 in `spp-editor/cpg`.

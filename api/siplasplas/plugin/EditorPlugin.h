@@ -64,8 +64,12 @@ public:
     virtual void formatChanged() {}
     // The text changed: an edit, undo or redo, or a file read.
     virtual void textChanged() {}
-    // Ctrl+click on a word (shown as a link while Ctrl is held over it):
-    // the cursor is at `position` now, e.g. for Go to Definition.
+    // Ctrl is held with the mouse over the word at `position`: is it a link
+    // (e.g. a symbol whose definition a language server knows)? Answered by
+    // EditorView::answerLink(), now or later; unanswered, it is no link.
+    virtual void linkQueried(TextPosition position) { (void)position; }
+    // Ctrl+click on a word shown as a link: the cursor is at `position` now,
+    // e.g. for Go to Definition.
     virtual void linkActivated(TextPosition position) { (void)position; }
 };
 
@@ -125,6 +129,12 @@ public:
     // are set again for the new text.
     virtual void setMarks(const QList<TextMark>& marks) = 0;
 
+    // The answer to EditorViewListener::linkQueried(position): the word
+    // there is a link, shown as one (blue, underlined, a pointing hand) while
+    // Ctrl is held over it, or it is none. An answer for a word the mouse has
+    // left, or after an edit, is let go.
+    virtual void answerLink(TextPosition position, bool isLink) = 0;
+
     // The listener is not owned and must outlive the view or be removed
     // (nullptr); one listener at a time.
     virtual void setListener(EditorViewListener* listener) = 0;
@@ -144,7 +154,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/3"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/4"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

@@ -48,13 +48,49 @@ const char* passphraseCallback(struct archive*, void* data)
     return state->current.constData();
 }
 
+// The volume file `index` (1, 2, ...) of an archive split as name.001,
+// name.002, ... (`base` is the name without the number).
+QString volumeName(const QString& base, int index)
+{
+    return QStringLiteral("%1.%2").arg(base).arg(index, 3, 10, QLatin1Char('0'));
+}
+
+// The files of the archive: name.001 and the volumes after it, else `path`.
+QStringList volumesOf(const QString& path)
+{
+    if (!path.endsWith(QLatin1String(".001")))
+        return {path};
+    const QString base = path.chopped(4);
+    QStringList result;
+    for (int i = 1; QFileInfo::exists(volumeName(base, i)); ++i)
+        result << volumeName(base, i);
+    return result;
+}
+
+// The size of all files of the archive, for progress.
+qint64 archiveSize(const QString& path)
+{
+    qint64 size = 0;
+    for (const QString& volume : volumesOf(path))
+        size += QFileInfo(volume).size();
+    return size;
+}
+
 ArchivePtr openForReading(const QString& path, PasswordState& password, QString& error)
 {
     ArchivePtr a(archive_read_new(), archive_read_free);
     archive_read_support_filter_all(a.get());
     archive_read_support_format_all(a.get());
     archive_read_set_passphrase_callback(a.get(), &password, passphraseCallback);
-    if (archive_read_open_filename(a.get(), QFile::encodeName(path).constData(), 64 * 1024) != ARCHIVE_OK) {
+    // Volumes are read as one stream.
+    QList<QByteArray> names;
+    for (const QString& volume : volumesOf(path))
+        names << QFile::encodeName(volume);
+    std::vector<const char*> pointers;
+    for (const QByteArray& name : names)
+        pointers.push_back(name.constData());
+    pointers.push_back(nullptr);
+    if (archive_read_open_filenames(a.get(), pointers.data(), 64 * 1024) != ARCHIVE_OK) {
         error = errorOf(a.get());
         return ArchivePtr(nullptr, archive_read_free);
     }
@@ -97,11 +133,6 @@ spp::ArchiveItem itemOf(struct archive_entry* entry)
     item.permissions = archive_entry_perm(entry);
     item.encrypted = archive_entry_is_data_encrypted(entry) == 1;
     return item;
-}
-
-QString notImplemented()
-{
-    return QObject::tr("Not implemented yet");
 }
 
 QString cancelled()
@@ -176,6 +207,133 @@ void setDirectoryTime(const QString& path, const QDateTime& time)
 #endif
 }
 
+// How a format id is written by libarchive.
+struct WriteFormat {
+    const char* id;
+    const char* format;   // archive_write_set_format_by_name
+    const char* filter;   // archive_write_add_filter_by_name, null: none
+    bool encrypt;
+};
+
+const WriteFormat kWriteFormats[] = {
+    {"zip", "zip", nullptr, true},
+    {"7z", "7zip", nullptr, false},
+    // paxr (restricted pax): ustar, with pax headers only where needed
+    // (long or non-ASCII names, big files).
+    {"tar", "paxr", nullptr, false},
+    {"tar.gz", "paxr", "gzip", false},
+    {"tar.bz2", "paxr", "bzip2", false},
+    {"tar.xz", "paxr", "xz", false},
+    {"tar.zst", "paxr", "zstd", false},
+    {"tar.lz4", "paxr", "lz4", false},
+    {"tar.lz", "paxr", "lzip", false},
+    {"tar.Z", "paxr", "compress", false},
+};
+
+const WriteFormat* writeFormat(const QString& id)
+{
+    for (const WriteFormat& format : kWriteFormats) {
+        if (id == QLatin1String(format.id))
+            return &format;
+    }
+    return nullptr;
+}
+
+// The output of a new archive: one file, or volumes name.001, name.002, ...
+// of at most `volumeSize` bytes each.
+class VolumeOutput {
+public:
+    VolumeOutput(const QString& path, qint64 volumeSize) : m_path(path), m_volumeSize(volumeSize) {}
+
+    static la_ssize_t write(struct archive* a, void* data, const void* buffer, size_t length)
+    {
+        auto* self = static_cast<VolumeOutput*>(data);
+        const char* bytes = static_cast<const char*>(buffer);
+        qint64 left = qint64(length);
+        while (left > 0) {
+            if (!self->m_file.isOpen() || (self->m_volumeSize > 0 && self->m_inFile == self->m_volumeSize)) {
+                if (!self->openNext()) {
+                    archive_set_error(a, EIO, "%s", self->m_error.toLocal8Bit().constData());
+                    return -1;
+                }
+            }
+            const qint64 chunk = self->m_volumeSize > 0 ? qMin(left, self->m_volumeSize - self->m_inFile) : left;
+            if (self->m_file.write(bytes, chunk) != chunk) {
+                archive_set_error(a, EIO, "%s", self->m_file.errorString().toLocal8Bit().constData());
+                return -1;
+            }
+            bytes += chunk;
+            left -= chunk;
+            self->m_inFile += chunk;
+        }
+        return la_ssize_t(length);
+    }
+
+    static int close(struct archive*, void* data)
+    {
+        auto* self = static_cast<VolumeOutput*>(data);
+        self->m_file.close();
+        return ARCHIVE_OK;
+    }
+
+    // The files written so far are removed (a failed or cancelled packing).
+    void removeAll()
+    {
+        m_file.close();
+        for (const QString& file : m_created)
+            QFile::remove(file);
+    }
+
+private:
+    bool openNext()
+    {
+        m_file.close();
+        m_file.setFileName(m_volumeSize > 0 ? volumeName(m_path, ++m_index) : m_path);
+        if (!m_file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            m_error = QObject::tr("Cannot write '%1': %2").arg(m_file.fileName(), m_file.errorString());
+            return false;
+        }
+        m_created << m_file.fileName();
+        m_inFile = 0;
+        return true;
+    }
+
+    QString m_path;
+    qint64 m_volumeSize;
+    int m_index = 0;
+    QFile m_file;
+    qint64 m_inFile = 0;
+    QStringList m_created;
+    QString m_error;
+};
+
+// A file to pack: on disk, and in the archive.
+struct Source {
+    QString absolute;
+    QString relative;
+};
+
+// `relative` and, for a directory (not a link to one), everything below it,
+// by name; `bytes` sums the sizes of the regular files.
+void collectSources(const QString& baseDir, const QString& relative, QList<Source>& sources, qint64& bytes)
+{
+    const QString absolute = baseDir + QLatin1Char('/') + relative;
+    const QFileInfo info(absolute);
+    sources.append({absolute, relative});
+    if (info.isSymLink())
+        return;
+    if (info.isFile()) {
+        bytes += info.size();
+        return;
+    }
+    if (!info.isDir())
+        return;
+    const QStringList children = QDir(absolute).entryList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString& child : children)
+        collectSources(baseDir, relative + QLatin1Char('/') + child, sources, bytes);
+}
+
 // A path taken, also by a broken symbolic link.
 bool targetExists(const QString& path)
 {
@@ -210,18 +368,18 @@ public:
             f.canEncrypt = encrypt;
             return f;
         };
-        // Writing comes with the pack() of a later version.
+        // Written: see kWriteFormats.
         return {
-            format("zip", "ZIP", {"zip"}, false),
-            format("7z", "7-Zip", {"7z"}, false),
-            format("tar", "tar", {"tar"}, false),
-            format("tar.gz", "tar + gzip", {"tar.gz", "tgz"}, false),
-            format("tar.bz2", "tar + bzip2", {"tar.bz2", "tbz2", "tbz"}, false),
-            format("tar.xz", "tar + xz", {"tar.xz", "txz"}, false),
-            format("tar.zst", "tar + Zstandard", {"tar.zst", "tzst"}, false),
-            format("tar.lz4", "tar + LZ4", {"tar.lz4"}, false),
-            format("tar.lz", "tar + lzip", {"tar.lz"}, false),
-            format("tar.Z", "tar + compress", {"tar.Z", "taz"}, false),
+            format("zip", "ZIP", {"zip"}, true, true),
+            format("7z", "7-Zip", {"7z"}, true),
+            format("tar", "tar", {"tar"}, true),
+            format("tar.gz", "tar + gzip", {"tar.gz", "tgz"}, true),
+            format("tar.bz2", "tar + bzip2", {"tar.bz2", "tbz2", "tbz"}, true),
+            format("tar.xz", "tar + xz", {"tar.xz", "txz"}, true),
+            format("tar.zst", "tar + Zstandard", {"tar.zst", "tzst"}, true),
+            format("tar.lz4", "tar + LZ4", {"tar.lz4"}, true),
+            format("tar.lz", "tar + lzip", {"tar.lz"}, true),
+            format("tar.Z", "tar + compress", {"tar.Z", "taz"}, true),
             format("rar", "RAR (without encryption)", {"rar"}, false),
             format("cab", "Microsoft Cabinet", {"cab"}, false),
             format("lha", "LHA/LZH", {"lha", "lzh"}, false),
@@ -240,7 +398,7 @@ public:
         if (!a)
             return false;
         // Progress by the bytes of the archive file read so far.
-        const qint64 total = QFileInfo(archivePath).size();
+        const qint64 total = archiveSize(archivePath);
         struct archive_entry* entry;
         int status;
         while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
@@ -276,7 +434,7 @@ public:
             return false;
         }
         // Progress by the bytes of the archive file read so far.
-        const qint64 total = QFileInfo(archivePath).size();
+        const qint64 total = archiveSize(archivePath);
         const auto report = [&](const QString& name) {
             return !progress || progress(archive_filter_bytes(a.get(), -1), total, name);
         };
@@ -432,11 +590,102 @@ public:
         return -1;
     }
 
-    bool pack(const QString&, const QString&, const QStringList&, const spp::PackOptions&,
-              QString& error, const spp::ArchiveProgress&) override
+    bool pack(const QString& archivePath, const QString& baseDir, const QStringList& files,
+              const spp::PackOptions& options, QString& error,
+              const spp::ArchiveProgress& progress) override
     {
-        error = notImplemented();
-        return false;
+        const WriteFormat* format = writeFormat(options.format);
+        if (!format) {
+            error = QObject::tr("Cannot write the format '%1'").arg(options.format);
+            return false;
+        }
+        if (!options.password.isEmpty() && !format->encrypt) {
+            error = QObject::tr("The format '%1' cannot be encrypted").arg(options.format);
+            return false;
+        }
+        const QString base = QDir(baseDir).absolutePath();
+        QList<Source> sources;
+        qint64 total = 0;
+        for (const QString& file : files) {
+            QString relative = QDir::cleanPath(file);
+            if (!isSafePath(relative) || !targetExists(base + QLatin1Char('/') + relative)) {
+                error = QObject::tr("'%1' is not in '%2'").arg(file, base);
+                return false;
+            }
+            collectSources(base, relative, sources, total);
+        }
+
+        ArchivePtr a(archive_write_new(), archive_write_free);
+        if (archive_write_set_format_by_name(a.get(), format->format) != ARCHIVE_OK
+            || (format->filter && archive_write_add_filter_by_name(a.get(), format->filter) < ARCHIVE_WARN)) {
+            error = errorOf(a.get());
+            return false;
+        }
+        // No padding of the output to 10 KiB blocks (for tapes): zstd and
+        // others reject zeros after the compressed stream.
+        archive_write_set_bytes_in_last_block(a.get(), 1);
+        // Names in UTF-8; a module without the option ignores it.
+        archive_write_set_options(a.get(), "hdrcharset=UTF-8");
+        if (options.level >= 0)
+            archive_write_set_options(a.get(), QByteArray("compression-level=")
+                                                   .append(QByteArray::number(options.level)).constData());
+        if (!options.password.isEmpty()) {
+            archive_write_set_options(a.get(), "zip:encryption=aes256");
+            archive_write_set_passphrase(a.get(), options.password.toUtf8().constData());
+        }
+
+        VolumeOutput output(archivePath, options.volumeSize);
+        const auto fail = [&](const QString& message) {
+            error = message;
+            a.reset();  // closes the output
+            output.removeAll();
+            return false;
+        };
+        if (archive_write_open2(a.get(), &output, nullptr, VolumeOutput::write, VolumeOutput::close, nullptr)
+            != ARCHIVE_OK)
+            return fail(errorOf(a.get()));
+
+        ArchivePtr disk(archive_read_disk_new(), archive_read_free);
+        archive_read_disk_set_standard_lookup(disk.get());
+        archive_read_disk_set_symlink_physical(disk.get());  // links are stored, not followed
+
+        qint64 done = 0;
+        char buffer[64 * 1024];
+        for (const Source& source : sources) {
+            if (progress && !progress(done, total, source.relative))
+                return fail(cancelled());
+            std::unique_ptr<struct archive_entry, void (*)(struct archive_entry*)> entry(
+                archive_entry_new(), archive_entry_free);
+            archive_entry_copy_sourcepath(entry.get(), QFile::encodeName(source.absolute).constData());
+            if (archive_read_disk_entry_from_file(disk.get(), entry.get(), -1, nullptr) < ARCHIVE_WARN)
+                return fail(errorOf(disk.get()));
+            const auto type = archive_entry_filetype(entry.get());
+            if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK)
+                continue;  // devices, pipes, sockets
+            archive_entry_set_pathname_utf8(entry.get(), source.relative.toUtf8().constData());
+            if (archive_write_header(a.get(), entry.get()) < ARCHIVE_WARN)
+                return fail(errorOf(a.get()));
+            if (type != AE_IFREG || archive_entry_size(entry.get()) == 0)
+                continue;
+            QFile file(source.absolute);
+            if (!file.open(QIODevice::ReadOnly))
+                return fail(QObject::tr("Cannot read '%1': %2").arg(source.absolute, file.errorString()));
+            for (;;) {
+                const qint64 n = file.read(buffer, sizeof buffer);
+                if (n < 0)
+                    return fail(QObject::tr("Cannot read '%1': %2").arg(source.absolute, file.errorString()));
+                if (n == 0)
+                    break;
+                if (archive_write_data(a.get(), buffer, size_t(n)) < 0)
+                    return fail(errorOf(a.get()));
+                done += n;
+                if (progress && !progress(done, total, source.relative))
+                    return fail(cancelled());
+            }
+        }
+        if (archive_write_close(a.get()) != ARCHIVE_OK)
+            return fail(errorOf(a.get()));
+        return true;
     }
 };
 

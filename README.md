@@ -9,7 +9,7 @@ Shared Qt 6 plugins and their interfaces for
 
 | Plugin | Interface | Needs | Does |
 |--------|-----------|-------|------|
-| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews; packing follows |
+| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
 
 Extracting keeps the entries' times and permissions (also of read-only
 directories, set at the end), makes symbolic links, and never writes outside
@@ -18,9 +18,18 @@ symbolic link, are left out.
 
 The archive plugin reads zip (also with a password), 7z, tar with gzip,
 bzip2, xz, Zstandard, LZ4, lzip or compress, RAR without encryption, CAB,
-LHA/LZH, ISO 9660, XAR, cpio and ar. Formats libarchive does not read — ARJ,
-ACE, encrypted RAR and 7z — are left to external programs (`unar`, `unrar`,
-`7z`) by the program using the plugin.
+LHA/LZH, ISO 9660, XAR, cpio and ar; an archive split into volumes
+(`name.001`, `name.002`, ...) is read from its first volume. Formats
+libarchive does not read — ARJ, ACE, encrypted RAR and 7z — are left to
+external programs (`unar`, `unrar`, `7z`) by the program using the plugin.
+
+It writes zip (with a password: AES-256), 7z, and tar with gzip, bzip2, xz,
+Zstandard, LZ4, lzip or compress, with names in UTF-8. Symbolic links are
+stored as links (not followed), hidden files are included, and devices,
+pipes and sockets are left out. With a volume size the archive is written as
+`name.001`, `name.002`, ... (plain parts, as 7-Zip splits). A cancelled or
+failed packing leaves no files behind. RAR, encrypted 7z and 7z's solid block
+size are not written by libarchive.
 
 ## Interfaces
 

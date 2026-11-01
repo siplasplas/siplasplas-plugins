@@ -7,7 +7,8 @@
 // do not depend on the archive library (libarchive).
 //
 // Only Qt and standard types cross the boundary. The plugin keeps no state
-// between calls: they may run on several threads at once.
+// between calls: they may run on several threads at once. An archive path
+// ending in .001 is read with the volumes after it (.002, .003, ...).
 
 #include <QDateTime>
 #include <QList>
@@ -96,7 +97,10 @@ public:
                              qint64 maxBytes, QString& error, const ArchivePassword& password = {}) = 0;
 
     // Packs `files` (paths relative to `baseDir`; directories with their
-    // contents) into a new archive at `archivePath`.
+    // contents) into a new archive at `archivePath`, replacing a file there.
+    // With PackOptions::volumeSize the files are archivePath.001, .002, ...
+    // Progress counts the bytes of the files packed. A cancelled or failed
+    // call leaves no files behind.
     virtual bool pack(const QString& archivePath, const QString& baseDir, const QStringList& files,
                       const PackOptions& options, QString& error,
                       const ArchiveProgress& progress = {}) = 0;

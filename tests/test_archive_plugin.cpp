@@ -338,6 +338,208 @@ TEST(ArchivePluginTest, CancelsExtracting)
     EXPECT_EQ(error, "Cancelled");
 }
 
+namespace {
+
+// A file on disk, parent directories made.
+void putFile(const QString& path, const QByteArray& data)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(data);
+}
+
+// The tree packed by the tests, in `base`/d.
+void makeTree(const QString& base)
+{
+    putFile(base + "/d/a.txt", "hello world");
+    putFile(base + QString::fromUtf8("/d/sub/zażółć.txt"), "x");
+    putFile(base + "/d/.hidden", "h");
+    putFile(base + "/d/empty", {});
+    QDir().mkpath(base + "/d/emptydir");
+    ASSERT_TRUE(QFile::link("a.txt", base + "/d/link"));
+}
+
+QStringList paths(const QList<spp::ArchiveItem>& items)
+{
+    QStringList result;
+    for (const spp::ArchiveItem& item : items)
+        result << item.path;
+    result.sort();
+    return result;
+}
+
+} // namespace
+
+TEST(ArchivePluginTest, PacksEveryWritableFormat)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    makeTree(dir.path());
+    const QStringList expected = {"d", "d/.hidden", "d/a.txt", "d/empty", "d/emptydir", "d/link",
+                                  "d/sub", QString::fromUtf8("d/sub/zażółć.txt")};
+    int written = 0;
+    for (const spp::ArchiveFormat& format : plugin()->formats()) {
+        if (!format.canWrite)
+            continue;
+        ++written;
+        SCOPED_TRACE(format.id.toStdString());
+        const QString path = dir.filePath("packed." + format.id);
+        spp::PackOptions options;
+        options.format = format.id;
+        QString error;
+        qint64 lastDone = -1, lastTotal = -1;
+        ASSERT_TRUE(plugin()->pack(path, dir.path(), {"d"}, options, error, [&](qint64 done, qint64 total, const QString&) {
+            lastDone = done;
+            lastTotal = total;
+            return true;
+        })) << error.toStdString();
+        EXPECT_EQ(lastTotal, 13);  // "hello world", "x", "h"
+        EXPECT_EQ(lastDone, 13);
+
+        QList<spp::ArchiveItem> items;
+        ASSERT_TRUE(plugin()->list(path, items, error)) << error.toStdString();
+        EXPECT_EQ(paths(items), expected);
+
+        const QString out = dir.filePath("out-" + format.id);
+        ASSERT_TRUE(plugin()->extract(path, out, {}, error)) << error.toStdString();
+        EXPECT_EQ(contents(out + "/d/a.txt"), "hello world");
+        EXPECT_EQ(contents(out + QString::fromUtf8("/d/sub/zażółć.txt")), "x");
+        EXPECT_EQ(contents(out + "/d/.hidden"), "h");
+        EXPECT_TRUE(QFileInfo(out + "/d/emptydir").isDir());
+    }
+    EXPECT_GE(written, 8);
+}
+
+TEST(ArchivePluginTest, KeepsSymbolicLinksInTarAndZip)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    makeTree(dir.path());
+    for (const char* id : {"tar.gz", "zip"}) {
+        SCOPED_TRACE(id);
+        const QString path = dir.filePath(QString("links.") + id);
+        spp::PackOptions options;
+        options.format = id;
+        QString error;
+        ASSERT_TRUE(plugin()->pack(path, dir.path(), {"d/link"}, options, error)) << error.toStdString();
+        QList<spp::ArchiveItem> items;
+        ASSERT_TRUE(plugin()->list(path, items, error));
+        ASSERT_EQ(items.size(), 1);
+        EXPECT_TRUE(items[0].isSymlink);
+        EXPECT_EQ(items[0].linkTarget, "a.txt");
+    }
+}
+
+TEST(ArchivePluginTest, PacksZipWithAPassword)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    makeTree(dir.path());
+    const QString path = dir.filePath("secret.zip");
+    spp::PackOptions options;
+    options.format = "zip";
+    options.password = "secret";
+    QString error;
+    ASSERT_TRUE(plugin()->pack(path, dir.path(), {"d/a.txt"}, options, error)) << error.toStdString();
+
+    QList<spp::ArchiveItem> items;
+    ASSERT_TRUE(plugin()->list(path, items, error));
+    ASSERT_EQ(items.size(), 1);
+    EXPECT_TRUE(items[0].encrypted);
+    QBuffer out;
+    out.open(QIODevice::WriteOnly);
+    EXPECT_EQ(plugin()->readEntry(path, "d/a.txt", &out, -1, error, [](const QString&) { return QString("secret"); }), 11);
+    EXPECT_EQ(out.data(), "hello world");
+
+    // Only zip encrypts.
+    options.format = "7z";
+    EXPECT_FALSE(plugin()->pack(dir.filePath("secret.7z"), dir.path(), {"d"}, options, error));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("secret.7z")));
+}
+
+TEST(ArchivePluginTest, SplitsIntoVolumesAndReadsThem)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    // Data that does not compress, so that the archive needs several volumes.
+    QByteArray data(300 * 1000, '\0');
+    quint32 seed = 12345;
+    for (char& c : data) {
+        seed = seed * 1103515245 + 12345;
+        c = char(seed >> 24);
+    }
+    putFile(dir.filePath("big.bin"), data);
+    putFile(dir.filePath("small.txt"), "small");
+
+    for (const char* id : {"7z", "zip", "tar.gz"}) {
+        SCOPED_TRACE(id);
+        const QString path = dir.filePath(QString("vol.") + id);
+        spp::PackOptions options;
+        options.format = id;
+        options.volumeSize = 100 * 1000;
+        QString error;
+        ASSERT_TRUE(plugin()->pack(path, dir.path(), {"big.bin", "small.txt"}, options, error)) << error.toStdString();
+        EXPECT_FALSE(QFileInfo::exists(path));
+        EXPECT_TRUE(QFileInfo::exists(path + ".004"));
+        EXPECT_FALSE(QFileInfo::exists(path + ".005"));
+        EXPECT_EQ(QFileInfo(path + ".001").size(), 100 * 1000);
+
+        QList<spp::ArchiveItem> items;
+        ASSERT_TRUE(plugin()->list(path + ".001", items, error)) << error.toStdString();
+        EXPECT_EQ(paths(items), QStringList({"big.bin", "small.txt"}));
+        const QString out = dir.filePath(QString("out-") + id);
+        ASSERT_TRUE(plugin()->extract(path + ".001", out, {}, error)) << error.toStdString();
+        EXPECT_EQ(contents(out + "/big.bin"), data);
+        EXPECT_EQ(contents(out + "/small.txt"), "small");
+    }
+}
+
+TEST(ArchivePluginTest, CompressionLevel)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    QByteArray text;
+    for (int i = 0; i < 20000; ++i)
+        text += QByteArray::number(i % 977) + " lorem ipsum dolor sit amet\n";
+    putFile(dir.filePath("text.txt"), text);
+    const auto packedSize = [&](int level) {
+        const QString path = dir.filePath(QString("level%1.tar.gz").arg(level));
+        spp::PackOptions options;
+        options.format = "tar.gz";
+        options.level = level;
+        QString error;
+        EXPECT_TRUE(plugin()->pack(path, dir.path(), {"text.txt"}, options, error)) << error.toStdString();
+        return QFileInfo(path).size();
+    };
+    EXPECT_LT(packedSize(9), packedSize(1));
+}
+
+TEST(ArchivePluginTest, PackingFailsCleanly)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    makeTree(dir.path());
+    spp::PackOptions options;
+    options.format = "zip";
+    QString error;
+
+    EXPECT_FALSE(plugin()->pack(dir.filePath("x.zip"), dir.path(), {"missing"}, options, error));
+    EXPECT_FALSE(plugin()->pack(dir.filePath("x.zip"), dir.path() + "/d", {"../d"}, options, error));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("x.zip")));
+
+    options.format = "rar";
+    EXPECT_FALSE(plugin()->pack(dir.filePath("x.rar"), dir.path(), {"d"}, options, error));
+
+    // Cancelled: nothing is left behind.
+    options.format = "zip";
+    options.volumeSize = 4;
+    EXPECT_FALSE(plugin()->pack(dir.filePath("c.zip"), dir.path(), {"d"}, options, error,
+                                [](qint64 done, qint64, const QString&) { return done < 5; }));
+    EXPECT_EQ(error, "Cancelled");
+    EXPECT_TRUE(QDir(dir.path()).entryList({"c.zip*"}).isEmpty());
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);

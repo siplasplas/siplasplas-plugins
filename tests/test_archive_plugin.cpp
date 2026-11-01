@@ -540,6 +540,53 @@ TEST(ArchivePluginTest, PackingFailsCleanly)
     EXPECT_TRUE(QDir(dir.path()).entryList({"c.zip*"}).isEmpty());
 }
 
+TEST(ArchivePluginTest, ReadsTheFilesOnTheWay)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("solid.tar.gz");
+    ASSERT_TRUE(writeArchive(path, "pax", "gzip", {
+        {"d", {}, true, {}},
+        {"d/a.txt", "aaaaaa", false, {}},
+        {"d/b.txt", "bbbbbb", false, {}},
+        {"d/c.txt", "cccccc", false, {}},
+        {"d/after.txt", "zzzzzz", false, {}},
+    }));
+
+    QStringList seen;
+    QByteArrayList data;
+    const auto start = [&](const spp::ArchiveItem& item, const QByteArray& bytes) {
+        seen << item.path;
+        data << bytes;
+    };
+    QString error;
+    // Up to c.txt, 4 bytes of each file passed; nothing after it.
+    ASSERT_TRUE(plugin()->readEntries(path, "d/c.txt", 4, {}, start, error)) << error.toStdString();
+    EXPECT_EQ(seen, QStringList({"d/a.txt", "d/b.txt", "d/c.txt"}));
+    EXPECT_EQ(data, QByteArrayList({"aaaa", "bbbb", "cccc"}));
+
+    // Only the wanted ones; the file stopped at always.
+    seen.clear();
+    data.clear();
+    ASSERT_TRUE(plugin()->readEntries(path, "d/c.txt", -1,
+                                      [](const spp::ArchiveItem& item) { return item.path == "d/a.txt"; },
+                                      start, error));
+    EXPECT_EQ(seen, QStringList({"d/a.txt", "d/c.txt"}));
+    EXPECT_EQ(data, QByteArrayList({"aaaaaa", "cccccc"}));
+
+    // All of it without a file to stop at.
+    seen.clear();
+    ASSERT_TRUE(plugin()->readEntries(path, {}, 1, {}, start, error));
+    EXPECT_EQ(seen.size(), 4);
+
+    EXPECT_FALSE(plugin()->readEntries(path, "missing", 1, {}, start, error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(plugin()->readEntries(path, "d", 1, {}, start, error));  // a directory
+    EXPECT_FALSE(plugin()->readEntries(path, "d/c.txt", 1, {}, start, error,
+                                       [](qint64, qint64, const QString&) { return false; }));
+    EXPECT_EQ(error, "Cancelled");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);

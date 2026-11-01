@@ -590,6 +590,66 @@ public:
         return -1;
     }
 
+    bool readEntries(const QString& archivePath, const QString& stopAt, qint64 maxBytes,
+                     const spp::EntryWanted& wanted, const spp::EntryStart& start, QString& error,
+                     const spp::ArchiveProgress& progress, const spp::ArchivePassword& password) override
+    {
+        PasswordState passwordState{&password, archivePath, {}};
+        ArchivePtr a = openForReading(archivePath, passwordState, error);
+        if (!a)
+            return false;
+        const qint64 total = archiveSize(archivePath);
+        struct archive_entry* entry;
+        int status;
+        char buffer[64 * 1024];
+        while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
+               || status == ARCHIVE_WARN) {
+            const spp::ArchiveItem item = itemOf(entry);
+            if (progress && !progress(archive_filter_bytes(a.get(), -1), total, item.path)) {
+                error = cancelled();
+                return false;
+            }
+            const bool last = !stopAt.isEmpty() && item.path == stopAt;
+            if (archive_entry_filetype(entry) == AE_IFREG && (last || !wanted || wanted(item))) {
+                // The start of the file; the rest is skipped (in a solid
+                // archive decompressed all the same, to reach what follows).
+                QByteArray data;
+                while (maxBytes < 0 || data.size() < maxBytes) {
+                    const qint64 want = maxBytes < 0 ? qint64(sizeof buffer)
+                                                     : qMin<qint64>(sizeof buffer, maxBytes - data.size());
+                    const la_ssize_t n = archive_read_data(a.get(), buffer, size_t(want));
+                    if (n < 0) {
+                        error = errorOf(a.get());
+                        return false;
+                    }
+                    if (n == 0)
+                        break;
+                    data.append(buffer, n);
+                    if (progress && !progress(archive_filter_bytes(a.get(), -1), total, item.path)) {
+                        error = cancelled();
+                        return false;
+                    }
+                }
+                if (start)
+                    start(item, data);
+            } else if (last) {
+                error = QObject::tr("'%1' is not a file").arg(stopAt);
+                return false;
+            }
+            if (last)
+                return true;
+        }
+        if (status != ARCHIVE_EOF) {
+            error = errorOf(a.get());
+            return false;
+        }
+        if (!stopAt.isEmpty()) {
+            error = QObject::tr("'%1' is not in the archive").arg(stopAt);
+            return false;
+        }
+        return true;
+    }
+
     bool pack(const QString& archivePath, const QString& baseDir, const QStringList& files,
               const spp::PackOptions& options, QString& error,
               const spp::ArchiveProgress& progress) override

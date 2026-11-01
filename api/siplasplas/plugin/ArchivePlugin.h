@@ -10,6 +10,7 @@
 // between calls: they may run on several threads at once. An archive path
 // ending in .001 is read with the volumes after it (.002, .003, ...).
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QList>
 #include <QString>
@@ -57,6 +58,10 @@ using ArchivePassword = std::function<QString(const QString& archivePath)>;
 enum class ExtractConflict { Overwrite, Skip, Cancel };
 using ExtractConflictHandler = std::function<ExtractConflict(const ArchiveItem& item, const QString& target)>;
 
+// readEntries(): whether the data of a file is wanted, and the start of it.
+using EntryWanted = std::function<bool(const ArchiveItem& item)>;
+using EntryStart = std::function<void(const ArchiveItem& item, const QByteArray& start)>;
+
 struct PackOptions {
     QString format;           // ArchiveFormat::id
     int level = -1;           // compression level, -1 the format's default
@@ -96,6 +101,17 @@ public:
     virtual qint64 readEntry(const QString& archivePath, const QString& entry, QIODevice* out,
                              qint64 maxBytes, QString& error, const ArchivePassword& password = {}) = 0;
 
+    // Reads the archive in its order up to and including the file `stopAt`
+    // (to the end when empty), giving `start` the first `maxBytes` of every
+    // file `wanted` accepts (all files when it is empty). For previews of
+    // solid archives (tar.gz, solid 7z), where everything before an entry
+    // is decompressed anyway: the files passed on the way come at no extra
+    // cost. False with `error` set when `stopAt` is not there, the archive
+    // cannot be read, or `progress` cancelled ("Cancelled").
+    virtual bool readEntries(const QString& archivePath, const QString& stopAt, qint64 maxBytes,
+                             const EntryWanted& wanted, const EntryStart& start, QString& error,
+                             const ArchiveProgress& progress = {}, const ArchivePassword& password = {}) = 0;
+
     // Packs `files` (paths relative to `baseDir`; directories with their
     // contents) into a new archive at `archivePath`, replacing a file there.
     // With PackOptions::volumeSize the files are archivePath.001, .002, ...
@@ -110,7 +126,7 @@ public:
 
 // The number changes with the interface: plugins built for another one are
 // not loaded.
-#define SPP_ARCHIVE_PLUGIN_IID "io.github.siplasplas.plugins.ArchivePlugin/1"
+#define SPP_ARCHIVE_PLUGIN_IID "io.github.siplasplas.plugins.ArchivePlugin/2"
 Q_DECLARE_INTERFACE(spp::ArchivePlugin, SPP_ARCHIVE_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_ARCHIVEPLUGIN_H

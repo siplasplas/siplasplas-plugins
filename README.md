@@ -9,7 +9,7 @@ Shared Qt 6 plugins and their interfaces for
 
 | Plugin | Interface | Needs | Does |
 |--------|-----------|-------|------|
-| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
+| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews — also of every file on the way to it (`readEntries`), which a solid archive decompresses anyway; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
 
 Extracting keeps the entries' times and permissions (also of read-only
 directories, set at the end), makes symbolic links, and never writes outside
@@ -36,7 +36,7 @@ size are not written by libarchive.
 The interfaces are headers in `api/` (CMake target
 `siplasplas::plugin-api`). Only Qt and standard types cross the boundary,
 and plugins keep no state between calls. Each interface has an IID with a
-version number, e.g. `io.github.siplasplas.plugins.ArchivePlugin/1`; it
+version number, e.g. `io.github.siplasplas.plugins.ArchivePlugin/2`; it
 changes with the interface, so a plugin built for another version is not
 loaded instead of failing.
 

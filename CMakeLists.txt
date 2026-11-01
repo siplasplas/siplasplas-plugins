@@ -31,6 +31,9 @@ endif()
 option(SPP_BUILD_ARCHIVE "Build the archive plugin (needs libarchive)" ON)
 # Tests (GoogleTest) when built on its own, not when fetched by a program.
 option(SPP_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+# The interface headers and CMake package are installed when built on its
+# own; a program fetching the repository installs only the plugins.
+option(SPP_INSTALL_API "Install the interface headers and CMake package" ${PROJECT_IS_TOP_LEVEL})
 
 add_subdirectory(api)
 

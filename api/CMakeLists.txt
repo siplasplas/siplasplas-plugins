@@ -8,6 +8,9 @@ target_include_directories(spp-plugin-api INTERFACE
 target_link_libraries(spp-plugin-api INTERFACE Qt6::Core)
 set_target_properties(spp-plugin-api PROPERTIES EXPORT_NAME plugin-api)
 
+if(NOT SPP_INSTALL_API)
+    return()
+endif()
 install(DIRECTORY siplasplas DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(TARGETS spp-plugin-api EXPORT siplasplas-plugins-targets)
 install(EXPORT siplasplas-plugins-targets

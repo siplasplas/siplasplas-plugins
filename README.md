@@ -54,8 +54,9 @@ Plugins are built into `build/plugins` and installed to
 `lib/siplasplas/qt6/plugins`. A program fetching this repository with
 FetchContent may set `SPP_PLUGIN_BUILD_DIR` and `SPP_PLUGIN_INSTALL_DIR`
 before, to put the plugins into its own plugin directory, and links
-`siplasplas::plugin-api`. `-DSPP_BUILD_ARCHIVE=OFF` leaves the archive plugin
-out.
+`siplasplas::plugin-api`; only the plugins are installed then (the headers
+and CMake package with `-DSPP_INSTALL_API=ON`). `-DSPP_BUILD_ARCHIVE=OFF`
+leaves the archive plugin out.
 
 The tests (GoogleTest, libgtest-dev) are built when the repository is built
 on its own (`SPP_BUILD_TESTS`); they take a fraction of a second:

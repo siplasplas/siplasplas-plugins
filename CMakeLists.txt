@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(siplasplas-plugins VERSION 0.4.0 LANGUAGES CXX)
+project(siplasplas-plugins VERSION 0.5.0 LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 17)
@@ -29,6 +29,10 @@ if(NOT DEFINED SPP_PLUGIN_INSTALL_DIR)
 endif()
 
 option(SPP_BUILD_ARCHIVE "Build the archive plugin (needs libarchive)" ON)
+# The editor plugin builds qcodeedit in: a program fetching this repository
+# asks for it (-DSPP_BUILD_EDITOR=ON) only when it does not link qcodeedit
+# itself, which would put two copies of it into one process.
+option(SPP_BUILD_EDITOR "Build the editor plugin (fetches qcodeedit; needs Qt Widgets, ICU)" ${PROJECT_IS_TOP_LEVEL})
 # Tests (GoogleTest) when built on its own, not when fetched by a program.
 option(SPP_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 # The interface headers and CMake package are installed when built on its
@@ -59,6 +63,10 @@ if(SPP_BUILD_ARCHIVE)
     else()
         message(STATUS "libarchive not found: no archive plugin")
     endif()
+endif()
+
+if(SPP_BUILD_EDITOR)
+    add_subdirectory(editor)
 endif()
 
 if(SPP_BUILD_TESTS)

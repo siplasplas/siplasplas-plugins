@@ -28,7 +28,10 @@ namespace spp {
 
 // An entry of an archive.
 struct ArchiveItem {
-    QString path;             // inside the archive, '/' separated, no leading "./" nor trailing '/'
+    // Inside the archive, '/' separated, no leading "./" nor trailing '/'.
+    // A zip name stored without its encoding is read as UTF-8 when valid,
+    // else in the DOS code page of the system's language (CP852 for Polish).
+    QString path;
     bool isDirectory = false;
     bool isSymlink = false;
     QString linkTarget;       // for a symbolic link

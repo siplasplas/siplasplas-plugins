@@ -9,6 +9,7 @@
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QFile>
+#include <QLocale>
 #include <QPluginLoader>
 #include <QTemporaryDir>
 
@@ -533,6 +534,68 @@ TEST(ArchivePluginTest, FindsVolumesByTheirNames)
             << error.toStdString();
         EXPECT_EQ(out.data(), data);
     }
+}
+
+TEST(ArchivePluginTest, ReadsDosNamesOfOldZips)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("old.zip");
+    // Names in CP852 without the UTF-8 flag, as DOS and old Windows zips.
+    {
+        struct archive* a = archive_write_new();
+        archive_write_set_format_zip(a);
+        ASSERT_EQ(archive_write_set_options(a, "hdrcharset=CP852"), ARCHIVE_OK);
+        ASSERT_EQ(archive_write_open_filename(a, QFile::encodeName(path).constData()), ARCHIVE_OK);
+        for (const char* name : {"zażółć.txt", "ŁÓDŹ/plik.txt"}) {
+            struct archive_entry* entry = archive_entry_new();
+            archive_entry_set_pathname_utf8(entry, name);
+            archive_entry_set_filetype(entry, AE_IFREG);
+            archive_entry_set_perm(entry, 0644);
+            archive_entry_set_size(entry, 2);
+            archive_write_header(a, entry);
+            archive_write_data(a, "ok", 2);
+            archive_entry_free(entry);
+        }
+        archive_write_close(a);
+        archive_write_free(a);
+    }
+    // Stored as CP852 bytes indeed ('ż' is 0xBE there).
+    QFile raw(path);
+    ASSERT_TRUE(raw.open(QIODevice::ReadOnly));
+    ASSERT_TRUE(raw.readAll().contains("za\xbe"));
+
+    // A Polish system reads them in CP852, its DOS code page.
+    QLocale::setDefault(QLocale(QLocale::Polish, QLocale::Poland));
+    QList<spp::ArchiveItem> items;
+    QString error;
+    ASSERT_TRUE(plugin()->list(path, items, error)) << error.toStdString();
+    ASSERT_EQ(items.size(), 2);
+    EXPECT_EQ(items[0].path, QString::fromUtf8("zażółć.txt"));
+    EXPECT_EQ(items[1].path, QString::fromUtf8("ŁÓDŹ/plik.txt"));
+
+    QBuffer out;
+    out.open(QIODevice::WriteOnly);
+    EXPECT_EQ(plugin()->readEntry(path, QString::fromUtf8("zażółć.txt"), &out, -1, error), 2);
+    QTemporaryDir dest;
+    ASSERT_TRUE(plugin()->extract(path, dest.path(), {}, error)) << error.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(dest.filePath(QString::fromUtf8("ŁÓDŹ/plik.txt"))));
+
+    // Elsewhere CP437, the zip format's own, decodes the same bytes otherwise.
+    QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
+    items.clear();
+    ASSERT_TRUE(plugin()->list(path, items, error));
+    EXPECT_NE(items[0].path, QString::fromUtf8("zażółć.txt"));
+    QLocale::setDefault(QLocale::c());
+
+    // Names with the UTF-8 flag stay as they are, whatever the language.
+    const QString utf8Path = dir.filePath("utf8.zip");
+    ASSERT_TRUE(writeArchive(utf8Path, "zip", "none", {{QString::fromUtf8("zażółć.txt"), "ok", false, {}}}));
+    QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
+    items.clear();
+    ASSERT_TRUE(plugin()->list(utf8Path, items, error));
+    EXPECT_EQ(items[0].path, QString::fromUtf8("zażółć.txt"));
+    QLocale::setDefault(QLocale::c());
 }
 
 TEST(ArchivePluginTest, CompressionLevel)

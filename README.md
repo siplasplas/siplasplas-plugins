@@ -21,7 +21,12 @@ bzip2, xz, Zstandard, LZ4, lzip or compress, RAR without encryption, CAB,
 LHA/LZH, ISO 9660, XAR, cpio and ar. An archive split into volumes is read
 as one from whichever volume is given: `name.001`, `name.002`, ... (7-Zip),
 RAR's `name.part1.rar`, `name.part2.rar`, ... and the old `name.rar`,
-`name.r00`, `name.r01`, ... (RAR 4 and 5, files spanning volumes too). Formats
+`name.r00`, `name.r01`, ... (RAR 4 and 5, files spanning volumes too). Old
+zips name their files in a DOS code page without saying which: such names
+are read as UTF-8 when they are valid UTF-8 (newer tools), else in the DOS
+code page of the system's language, as Windows does — CP852 for Polish,
+Czech, Hungarian and the like, CP866 for Russian and the like, CP850 for
+Western European languages, otherwise CP437, the zip format's own. Formats
 libarchive does not read — ARJ, ACE, encrypted RAR and 7z — are left to
 external programs (`unar`, `unrar`, `7z`) by the program using the plugin.
 

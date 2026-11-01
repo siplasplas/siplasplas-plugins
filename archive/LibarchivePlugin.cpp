@@ -7,8 +7,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QLocale>
 #include <QObject>
 #include <QRegularExpression>
+#include <QStringDecoder>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -133,15 +135,57 @@ ArchivePtr openForReading(const QString& path, PasswordState& password, QString&
     return a;
 }
 
-// The entry's path: UTF-8 when the archive says so, else in the locale's
-// encoding (old zips name their files in a DOS code page, unknown here);
-// without a leading "./" and trailing '/'.
-QString entryPath(struct archive_entry* entry)
+// The DOS code page in which old zips (made on DOS or by Windows' own zip)
+// name their files: the system's OEM code page, guessed from the language.
+const char* dosCodePage()
+{
+    switch (QLocale().language()) {
+        case QLocale::Polish: case QLocale::Czech: case QLocale::Slovak: case QLocale::Hungarian:
+        case QLocale::Slovenian: case QLocale::Croatian: case QLocale::Romanian: case QLocale::Bosnian:
+            return "IBM852";
+        case QLocale::Russian: case QLocale::Ukrainian: case QLocale::Belarusian: case QLocale::Bulgarian:
+            return "IBM866";
+        case QLocale::German: case QLocale::French: case QLocale::Spanish: case QLocale::Italian:
+        case QLocale::Portuguese: case QLocale::Dutch: case QLocale::Danish: case QLocale::Swedish:
+        case QLocale::NorwegianBokmal: case QLocale::Finnish: case QLocale::Catalan:
+            return "IBM850";
+        default:
+            return "IBM437";  // what the zip format specifies
+    }
+}
+
+// Bytes of a name stored without saying its encoding: UTF-8 when they are
+// valid UTF-8 (newer tools), else in the DOS code page (old zips).
+QString decodeStoredName(const QByteArray& bytes)
+{
+    QStringDecoder utf8(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
+    const QString text = utf8.decode(bytes);
+    if (!utf8.hasError())
+        return text;
+    QStringDecoder dos(dosCodePage());
+    return dos.isValid() ? dos.decode(bytes) : QString::fromLatin1(bytes);
+}
+
+// The entry's path, without a leading "./" and trailing '/'. A zip names its
+// files in UTF-8 when it says so; else in raw bytes of an unknown encoding:
+// see decodeStoredName. Other formats: as libarchive converts them.
+QString entryPath(struct archive* a, struct archive_entry* entry)
 {
     QString path;
-    if (const char* utf8 = archive_entry_pathname_utf8(entry))
+    const bool zip = (archive_format(a) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_ZIP;
+    const char* raw = archive_entry_pathname(entry);
+    const auto highBytes = [](const char* s) {
+        for (; *s; ++s) {
+            if (static_cast<unsigned char>(*s) >= 0x80)
+                return true;
+        }
+        return false;
+    };
+    if (zip && raw && highBytes(raw))
+        path = decodeStoredName(QByteArray(raw));
+    else if (const char* utf8 = archive_entry_pathname_utf8(entry))
         path = QString::fromUtf8(utf8);
-    else if (const char* raw = archive_entry_pathname(entry))
+    else if (raw)
         path = QString::fromLocal8Bit(raw);
     while (path.startsWith(QLatin1String("./")))
         path.remove(0, 2);
@@ -150,10 +194,10 @@ QString entryPath(struct archive_entry* entry)
     return path == QLatin1String(".") ? QString() : path;
 }
 
-spp::ArchiveItem itemOf(struct archive_entry* entry)
+spp::ArchiveItem itemOf(struct archive* a, struct archive_entry* entry)
 {
     spp::ArchiveItem item;
-    item.path = entryPath(entry);
+    item.path = entryPath(a, entry);
     const auto type = archive_entry_filetype(entry);
     item.isDirectory = type == AE_IFDIR;
     item.isSymlink = type == AE_IFLNK;
@@ -439,7 +483,7 @@ public:
         int status;
         while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
                || status == ARCHIVE_WARN) {
-            spp::ArchiveItem item = itemOf(entry);
+            spp::ArchiveItem item = itemOf(a.get(), entry);
             if (!item.path.isEmpty())
                 items.append(item);
             if (progress && !progress(archive_filter_bytes(a.get(), -1), total, item.path)) {
@@ -482,7 +526,7 @@ public:
         int status;
         while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
                || status == ARCHIVE_WARN) {
-            const spp::ArchiveItem item = itemOf(entry);
+            const spp::ArchiveItem item = itemOf(a.get(), entry);
             if (!isSelected(item.path, entries) || !isSafePath(item.path)
                 || !parentsAreRealDirs(root, item.path)) {
                 archive_read_data_skip(a.get());
@@ -592,7 +636,7 @@ public:
         int status;
         while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
                || status == ARCHIVE_WARN) {
-            if (entryPath(entry) != entryName) {
+            if (entryPath(a.get(), entry) != entryName) {
                 archive_read_data_skip(a.get());
                 continue;
             }
@@ -640,7 +684,7 @@ public:
         char buffer[64 * 1024];
         while ((status = archive_read_next_header(a.get(), &entry)) == ARCHIVE_OK
                || status == ARCHIVE_WARN) {
-            const spp::ArchiveItem item = itemOf(entry);
+            const spp::ArchiveItem item = itemOf(a.get(), entry);
             if (progress && !progress(archive_filter_bytes(a.get(), -1), total, item.path)) {
                 error = cancelled();
                 return false;

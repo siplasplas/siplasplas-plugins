@@ -21,7 +21,7 @@ set(QCE_BUILD_DIFF ON)
 set(CMAKE_DISABLE_FIND_PACKAGE_cpg TRUE)
 FetchContent_Declare(qcodeedit
     GIT_REPOSITORY https://github.com/siplasplas/qcodeedit.git
-    GIT_TAG v1.69.0
+    GIT_TAG v1.70.0
     GIT_SHALLOW TRUE
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(qcodeedit)

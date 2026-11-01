@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QToolTip>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPluginLoader>
 #include <QTemporaryDir>
 #include <QWidget>
@@ -64,7 +65,9 @@ struct Listener : spp::EditorViewListener {
     QStringList paths;
     spp::TextPosition cursor{-1, -1};
     int textChanges = 0;
+    QList<spp::TextPosition> links;
     void textChanged() override { ++textChanges; }
+    void linkActivated(spp::TextPosition position) override { links << position; }
     void modificationChanged(bool value) override { modified << value; }
     void cursorMoved(spp::TextPosition position) override { cursor = position; }
     void filePathChanged(const QString& path) override { paths << path; }
@@ -211,6 +214,46 @@ TEST(EditorPlugin, MarksShowTheirMessages)
     EXPECT_GT(listener.textChanges, 0);
     QCoreApplication::sendEvent(area->viewport(), &onMark);
     EXPECT_FALSE(QToolTip::isVisible());
+    view->setListener(nullptr);
+}
+
+// With Ctrl the word under the mouse is a link (a pointing hand); Ctrl+click
+// on it tells the listener, a plain click does not.
+TEST(EditorPlugin, CtrlClickFollowsALink)
+{
+    QTemporaryDir dir;
+    const QString path = write(dir, "link.cpp", "answer();\n");
+    spp::EditorView* view = plugin()->createEditor();
+    const auto owner = editorWidget(view);
+    view->widget()->resize(600, 300);
+    view->widget()->show();
+    ASSERT_EQ(view->open(path), spp::EditorResult::Ok);
+    Listener listener;
+    view->setListener(&listener);
+    QWidget* viewport = view->widget()->findChild<QAbstractScrollArea*>()->viewport();
+    const QPoint onWord(4, 4);
+
+    QMouseEvent plainMove(QEvent::MouseMove, onWord, viewport->mapToGlobal(onWord), Qt::NoButton, Qt::NoButton,
+                          Qt::NoModifier);
+    QCoreApplication::sendEvent(viewport, &plainMove);
+    EXPECT_NE(viewport->cursor().shape(), Qt::PointingHandCursor);
+    QMouseEvent ctrlMove(QEvent::MouseMove, onWord, viewport->mapToGlobal(onWord), Qt::NoButton, Qt::NoButton,
+                         Qt::ControlModifier);
+    QCoreApplication::sendEvent(viewport, &ctrlMove);
+    EXPECT_EQ(viewport->cursor().shape(), Qt::PointingHandCursor);
+
+    QMouseEvent plainClick(QEvent::MouseButtonPress, onWord, viewport->mapToGlobal(onWord), Qt::LeftButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(viewport, &plainClick);
+    EXPECT_TRUE(listener.links.isEmpty());
+    QMouseEvent ctrlClick(QEvent::MouseButtonPress, onWord, viewport->mapToGlobal(onWord), Qt::LeftButton,
+                          Qt::LeftButton, Qt::ControlModifier);
+    QCoreApplication::sendEvent(viewport, &ctrlClick);
+    ASSERT_EQ(listener.links.size(), 1);
+    EXPECT_EQ(listener.links.first().line, 0);
+    EXPECT_EQ(view->cursorPosition().line, 0);
+    // The link is gone once followed.
+    EXPECT_NE(viewport->cursor().shape(), Qt::PointingHandCursor);
     view->setListener(nullptr);
 }
 

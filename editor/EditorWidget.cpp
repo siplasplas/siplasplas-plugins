@@ -9,8 +9,12 @@
 #include <qce/kate/EditorSyntax.h>
 #include <qce/margins/FoldingGutter.h>
 #include <qce/margins/LineNumberGutter.h>
+#include <qce/WordBoundary.h>
 
+#include <QCursor>
 #include <QHelpEvent>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QToolTip>
 #include <QVBoxLayout>
 
@@ -19,8 +23,10 @@
 namespace spp {
 namespace {
 
-// The area's layer of the marks, beside qcodeedit-spell's (100, 101).
+// The area's layers of the marks and of the link under the mouse, beside
+// qcodeedit-spell's (100, 101).
 constexpr int MarksLayer = 110;
+constexpr int LinkLayer = 111;
 
 EditorResult toResult(qce::encoding::TextFile::Result result)
 {
@@ -74,10 +80,14 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
     // marks' messages go with them.
     connect(m_edit->area(), &qce::CodeEditArea::textChanged, this, [this] {
         m_marks.clear();
+        m_linkShown = false;
         if (m_listener) m_listener->textChanged();
     });
-    // The messages of the marks under the mouse.
+    // The messages of the marks under the mouse, and the word under it as a
+    // link while Ctrl is held (Ctrl pressed and released over it too).
     m_edit->area()->viewport()->installEventFilter(this);
+    m_edit->area()->viewport()->setMouseTracking(true);
+    m_edit->area()->installEventFilter(this);
 
     // The default theme for the desktop until a file chooses a syntax.
     m_syntax = std::make_unique<qce::kate::EditorSyntax>(m_edit);
@@ -90,6 +100,7 @@ EditorWidget::~EditorWidget()
     disconnect(m_file, nullptr, this, nullptr);
     disconnect(m_edit->area(), nullptr, this, nullptr);
     m_edit->area()->viewport()->removeEventFilter(this);
+    m_edit->area()->removeEventFilter(this);
     m_syntax.reset();
 }
 
@@ -224,9 +235,92 @@ void EditorWidget::setMarks(const QList<TextMark>& marks)
     m_edit->area()->setExtraSelections(MarksLayer, selections);
 }
 
+bool EditorWidget::linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const
+{
+    using qce::words::isWordCharAt;
+    const qce::TextCursor at = m_edit->area()->cursorAt(viewportPoint);
+    const QString line = m_document->lineAt(at.line);
+    // The cursor goes to the nearer edge of a character: over the right half
+    // of a word's last one it is after it.
+    int column = at.column;
+    if ((column >= line.size() || !isWordCharAt(line, column)) && column > 0 && isWordCharAt(line, column - 1))
+        --column;
+    if (column >= line.size() || !isWordCharAt(line, column)) return false;
+    int first = column;
+    int last = column + 1;
+    while (first > 0 && isWordCharAt(line, first - 1)) --first;
+    while (last < line.size() && isWordCharAt(line, last)) ++last;
+    *start = {at.line, first};
+    *end = {at.line, last};
+    return true;
+}
+
+void EditorWidget::showLink(const QPoint& viewportPoint, bool ctrl)
+{
+    TextPosition start;
+    TextPosition end;
+    if (!ctrl || !linkAt(viewportPoint, &start, &end)) {
+        hideLink();
+        return;
+    }
+    // Blue, with a straight line under it, as a link.
+    const QColor blue(0x1a, 0x5f, 0xd6);
+    qce::ExtraSelection link{{start.line, start.column}, {end.line, end.column}, {}, blue, blue};
+    link.straightUnderline = true;
+    m_edit->area()->setExtraSelections(LinkLayer, {link});
+    m_edit->area()->viewport()->setCursor(Qt::PointingHandCursor);
+    m_linkShown = true;
+}
+
+void EditorWidget::hideLink()
+{
+    if (!m_linkShown) return;
+    m_linkShown = false;
+    m_edit->area()->setExtraSelections(LinkLayer, {});
+    m_edit->area()->viewport()->setCursor(Qt::IBeamCursor);
+}
+
 bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == m_edit->area()->viewport() && event->type() == QEvent::ToolTip) {
+    QWidget* viewport = m_edit->area()->viewport();
+    if (watched == viewport) {
+        switch (event->type()) {
+        case QEvent::MouseMove: {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->buttons() == Qt::NoButton)
+                showLink(mouse->position().toPoint(), mouse->modifiers() & Qt::ControlModifier);
+            break;
+        }
+        case QEvent::MouseButtonPress: {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            TextPosition start;
+            TextPosition end;
+            if (mouse->button() == Qt::LeftButton && (mouse->modifiers() & Qt::ControlModifier)
+                && linkAt(mouse->position().toPoint(), &start, &end)) {
+                // Ctrl+click follows the link: the cursor goes there first.
+                const qce::TextCursor at = m_edit->area()->cursorAt(mouse->position().toPoint());
+                hideLink();
+                m_edit->area()->setCursorPosition(at);
+                if (m_listener) m_listener->linkActivated({at.line, at.column});
+                return true;
+            }
+            break;
+        }
+        case QEvent::Leave: hideLink(); break;
+        default: break;
+        }
+    } else if (watched == m_edit->area()
+               && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
+        // Ctrl pressed or let go with the mouse resting over the text.
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Control && viewport->underMouse())
+            showLink(viewport->mapFromGlobal(QCursor::pos()), event->type() == QEvent::KeyPress);
+        else if (event->type() == QEvent::KeyPress)
+            hideLink();
+    } else if (watched == m_edit->area() && event->type() == QEvent::FocusOut) {
+        hideLink();
+    }
+    if (watched == viewport && event->type() == QEvent::ToolTip) {
         const auto* help = static_cast<QHelpEvent*>(event);
         const qce::TextCursor at = m_edit->area()->cursorAt(help->pos());
         auto before = [](int line, int column, const TextPosition& position) {

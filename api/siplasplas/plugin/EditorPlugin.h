@@ -64,6 +64,9 @@ public:
     virtual void formatChanged() {}
     // The text changed: an edit, undo or redo, or a file read.
     virtual void textChanged() {}
+    // Ctrl+click on a word (shown as a link while Ctrl is held over it):
+    // the cursor is at `position` now, e.g. for Go to Definition.
+    virtual void linkActivated(TextPosition position) { (void)position; }
 };
 
 // One editor: a widget with a document and the file behind it.
@@ -141,7 +144,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/2"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/3"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

@@ -11,7 +11,7 @@ dependencies (e.g. libarchive) out of the programs, which work without it.
 | Plugin | Interface | Needs | Does |
 |--------|-----------|-------|------|
 | `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev); optionally `lsar`/`unar` (unar) and `7z` (p7zip-full or 7zip) at run time | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews — also of every file on the way to it (`readEntries`), which a solid archive decompresses anyway; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
-| `spp-editor` | `spp::EditorPlugin`, `spp::EditorView` (`siplasplas/plugin/EditorPlugin.h`) | Qt Widgets; [qcodeedit](https://github.com/siplasplas/qcodeedit) 1.69 with [cpg](https://github.com/siplasplas/cpg), fetched and built in (ICU, libicu-dev) | a code editor widget for the program's own window and tabs: opens and saves files in their encoding, colours them with Kate syntax definitions and the Kate theme matching the desktop, reloads files changed on disk as one undo step; see below |
+| `spp-editor` | `spp::EditorPlugin`, `spp::EditorView` (`siplasplas/plugin/EditorPlugin.h`) | Qt Widgets; [qcodeedit](https://github.com/siplasplas/qcodeedit) 1.70 with [cpg](https://github.com/siplasplas/cpg), fetched and built in (ICU, libicu-dev) | a code editor widget for the program's own window and tabs: opens and saves files in their encoding, colours them with Kate syntax definitions and the Kate theme matching the desktop, reloads files changed on disk as one undo step; see below |
 
 Extracting keeps the entries' times and permissions (also of read-only
 directories, set at the end), makes symbolic links, and never writes outside
@@ -80,6 +80,12 @@ warnings amber, information blue, hints grey — and shows their messages when
 the mouse rests on them, e.g. a language server's diagnostics. The marks
 replace those set before, and an edit removes them until they are set again
 for the new text.
+
+With Ctrl held, the word under the mouse looks like a link — blue, with a
+straight blue line under it — and the mouse pointer becomes a pointing hand
+(also when Ctrl is pressed or let go while the mouse rests). A Ctrl+click on
+it puts the cursor there and tells the listener (`linkActivated()`), e.g.
+for Go to Definition.
 
 Encoding detection reads cpg's language models, installed next to the plugin
 in `spp-editor/cpg`.

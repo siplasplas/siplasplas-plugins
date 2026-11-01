@@ -62,6 +62,11 @@ protected:
 private:
     // Colours the text by the file's name (after it was opened or renamed).
     void applySyntax();
+    // The word at `viewportPoint` as a link while Ctrl is held; false when
+    // there is no word there. linkAt() only finds it.
+    bool linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const;
+    void showLink(const QPoint& viewportPoint, bool ctrl);
+    void hideLink();
 
     qce::SimpleTextDocument* m_document = nullptr;
     qce::CodeEdit* m_edit = nullptr;
@@ -74,6 +79,7 @@ private:
     bool m_wordWrap = true;
     // The marks underlined now (an edit clears them), for their tooltips.
     QList<TextMark> m_marks;
+    bool m_linkShown = false;
 };
 
 } // namespace spp

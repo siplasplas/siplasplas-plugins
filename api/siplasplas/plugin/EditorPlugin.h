@@ -16,6 +16,7 @@
 // qcodeedit (~/.local/share/kate-data) and the Kate theme matching the
 // desktop. A reload changes only the lines that differ, as one undo step.
 
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QtPlugin>
@@ -29,6 +30,16 @@ namespace spp {
 struct TextPosition {
     int line = 0;
     int column = 0;
+};
+
+// A range of the text marked with a message, e.g. a language server's
+// diagnostic: underlined, its message shown when the mouse rests on it.
+struct TextMark {
+    enum class Kind { Error, Warning, Information, Hint };
+    TextPosition start;
+    TextPosition end;  // past the range; equal to start marks one character
+    Kind kind = Kind::Error;
+    QString message;
 };
 
 // Result of reading or saving a file.
@@ -51,6 +62,8 @@ public:
     virtual void filePathChanged(const QString& path) { (void)path; }
     // Encoding or line breaks changed, e.g. for a status bar.
     virtual void formatChanged() {}
+    // The text changed: an edit, undo or redo, or a file read.
+    virtual void textChanged() {}
 };
 
 // One editor: a widget with a document and the file behind it.
@@ -103,6 +116,12 @@ public:
     // The whole text, lines joined by "\n".
     virtual QString text() const = 0;
 
+    // Underlines the ranges (errors red, warnings amber, information blue,
+    // hints grey) and shows their messages when the mouse rests on them;
+    // replaces the marks set before. An edit removes them all, until they
+    // are set again for the new text.
+    virtual void setMarks(const QList<TextMark>& marks) = 0;
+
     // The listener is not owned and must outlive the view or be removed
     // (nullptr); one listener at a time.
     virtual void setListener(EditorViewListener* listener) = 0;
@@ -122,7 +141,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/1"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/2"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

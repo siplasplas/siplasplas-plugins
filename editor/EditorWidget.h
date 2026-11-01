@@ -52,8 +52,12 @@ public:
     TextPosition cursorPosition() const override;
     void setCursorPosition(TextPosition position) override;
     QString text() const override;
+    void setMarks(const QList<TextMark>& marks) override;
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     // Colours the text by the file's name (after it was opened or renamed).
@@ -68,6 +72,8 @@ private:
     std::unique_ptr<qce::kate::EditorSyntax> m_syntax;
     EditorViewListener* m_listener = nullptr;
     bool m_wordWrap = true;
+    // The marks underlined now (an edit clears them), for their tooltips.
+    QList<TextMark> m_marks;
 };
 
 } // namespace spp

@@ -7,8 +7,13 @@
 
 #include <gtest/gtest.h>
 
+#include <QAbstractScrollArea>
 #include <QApplication>
 #include <QFile>
+#include <QElapsedTimer>
+#include <QHelpEvent>
+#include <QThread>
+#include <QToolTip>
 #include <QKeyEvent>
 #include <QPluginLoader>
 #include <QTemporaryDir>
@@ -58,10 +63,24 @@ struct Listener : spp::EditorViewListener {
     QList<bool> modified;
     QStringList paths;
     spp::TextPosition cursor{-1, -1};
+    int textChanges = 0;
+    void textChanged() override { ++textChanges; }
     void modificationChanged(bool value) override { modified << value; }
     void cursorMoved(spp::TextPosition position) override { cursor = position; }
     void filePathChanged(const QString& path) override { paths << path; }
 };
+
+// QToolTip hides after a moment: waits until it is gone.
+void hideToolTip()
+{
+    QToolTip::hideText();
+    QElapsedTimer timer;
+    timer.start();
+    while (QToolTip::isVisible() && timer.elapsed() < 3000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(10);
+    }
+}
 
 std::unique_ptr<QWidget> editorWidget(spp::EditorView* view)
 {
@@ -156,6 +175,43 @@ TEST(EditorPlugin, ReadOnlyAndCursor)
     EXPECT_EQ(view->cursorPosition().line, 0);
     EXPECT_EQ(view->cursorPosition().column, 3);
     EXPECT_TRUE(view->wordWrap());
+}
+
+// A mark's message shows where the mouse rests on it; typing tells the
+// listener and takes the marks away.
+TEST(EditorPlugin, MarksShowTheirMessages)
+{
+    QTemporaryDir dir;
+    const QString path = write(dir, "marks.cpp", "int x = y;\nint z;\n");
+    spp::EditorView* view = plugin()->createEditor();
+    const auto owner = editorWidget(view);
+    view->widget()->resize(600, 300);
+    view->widget()->show();
+    ASSERT_EQ(view->open(path), spp::EditorResult::Ok);
+    Listener listener;
+    view->setListener(&listener);
+    view->setMarks({{{0, 0}, {0, 10}, spp::TextMark::Kind::Error, QStringLiteral("use of undeclared identifier 'y'")}});
+
+    auto* area = view->widget()->findChild<QAbstractScrollArea*>();
+    ASSERT_NE(area, nullptr);
+    QHelpEvent onMark(QEvent::ToolTip, QPoint(4, 4), area->viewport()->mapToGlobal(QPoint(4, 4)));
+    QCoreApplication::sendEvent(area->viewport(), &onMark);
+    EXPECT_TRUE(QToolTip::isVisible());
+    EXPECT_TRUE(QToolTip::text().contains(QStringLiteral("undeclared identifier")));
+    hideToolTip();
+    ASSERT_FALSE(QToolTip::isVisible());
+    // The second line has no mark.
+    const QPoint below(4, area->viewport()->fontMetrics().height() * 3 / 2 + 4);
+    QHelpEvent offMark(QEvent::ToolTip, below, area->viewport()->mapToGlobal(below));
+    QCoreApplication::sendEvent(area->viewport(), &offMark);
+    EXPECT_FALSE(QToolTip::isVisible());
+
+    view->setCursorPosition({1, 0});
+    type(view, Qt::Key_A, QStringLiteral("a"));
+    EXPECT_GT(listener.textChanges, 0);
+    QCoreApplication::sendEvent(area->viewport(), &onMark);
+    EXPECT_FALSE(QToolTip::isVisible());
+    view->setListener(nullptr);
 }
 
 TEST(EditorPlugin, ReportsFailures)

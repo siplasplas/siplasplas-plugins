@@ -10,12 +10,17 @@
 #include <qce/margins/FoldingGutter.h>
 #include <qce/margins/LineNumberGutter.h>
 
+#include <QHelpEvent>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace spp {
 namespace {
+
+// The area's layer of the marks, beside qcodeedit-spell's (100, 101).
+constexpr int MarksLayer = 110;
 
 EditorResult toResult(qce::encoding::TextFile::Result result)
 {
@@ -65,6 +70,14 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
     connect(m_edit->area(), &qce::CodeEditArea::cursorPositionChanged, this, [this](qce::TextCursor cursor) {
         if (m_listener) m_listener->cursorMoved({cursor.line, cursor.column});
     });
+    // The area clears its decorations on every change of the text; the
+    // marks' messages go with them.
+    connect(m_edit->area(), &qce::CodeEditArea::textChanged, this, [this] {
+        m_marks.clear();
+        if (m_listener) m_listener->textChanged();
+    });
+    // The messages of the marks under the mouse.
+    m_edit->area()->viewport()->installEventFilter(this);
 
     // The default theme for the desktop until a file chooses a syntax.
     m_syntax = std::make_unique<qce::kate::EditorSyntax>(m_edit);
@@ -76,6 +89,7 @@ EditorWidget::~EditorWidget()
 {
     disconnect(m_file, nullptr, this, nullptr);
     disconnect(m_edit->area(), nullptr, this, nullptr);
+    m_edit->area()->viewport()->removeEventFilter(this);
     m_syntax.reset();
 }
 
@@ -184,6 +198,58 @@ void EditorWidget::setCursorPosition(TextPosition position)
 QString EditorWidget::text() const
 {
     return m_document->toPlainText();
+}
+
+void EditorWidget::setMarks(const QList<TextMark>& marks)
+{
+    m_marks = marks;
+    QVector<qce::ExtraSelection> selections;
+    selections.reserve(marks.size());
+    for (const TextMark& mark : marks) {
+        qce::ExtraSelection selection;
+        selection.start = {mark.start.line, mark.start.column};
+        selection.end = {mark.end.line, mark.end.column};
+        // An empty range marks the character at its start.
+        if (mark.end.line < mark.start.line
+            || (mark.end.line == mark.start.line && mark.end.column <= mark.start.column))
+            selection.end = {mark.start.line, mark.start.column + 1};
+        switch (mark.kind) {
+        case TextMark::Kind::Error: selection.underline = QColor(0xe0, 0x20, 0x20); break;
+        case TextMark::Kind::Warning: selection.underline = QColor(0xd0, 0x90, 0x00); break;
+        case TextMark::Kind::Information: selection.underline = QColor(0x30, 0x70, 0xd0); break;
+        case TextMark::Kind::Hint: selection.underline = QColor(0x90, 0x90, 0x90); break;
+        }
+        selections << selection;
+    }
+    m_edit->area()->setExtraSelections(MarksLayer, selections);
+}
+
+bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_edit->area()->viewport() && event->type() == QEvent::ToolTip) {
+        const auto* help = static_cast<QHelpEvent*>(event);
+        const qce::TextCursor at = m_edit->area()->cursorAt(help->pos());
+        auto before = [](int line, int column, const TextPosition& position) {
+            return line < position.line || (line == position.line && column < position.column);
+        };
+        QStringList messages;
+        for (const TextMark& mark : m_marks) {
+            const TextPosition end = (mark.end.line > mark.start.line
+                                      || (mark.end.line == mark.start.line && mark.end.column > mark.start.column))
+                                         ? mark.end
+                                         : TextPosition{mark.start.line, mark.start.column + 1};
+            if (!before(at.line, at.column, mark.start) && before(at.line, at.column, end))
+                messages << mark.message.toHtmlEscaped();
+        }
+        if (messages.isEmpty()) {
+            QToolTip::hideText();
+            event->ignore();
+        } else {
+            QToolTip::showText(help->globalPos(), messages.join(QStringLiteral("<hr>")), m_edit->area()->viewport());
+        }
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 } // namespace spp

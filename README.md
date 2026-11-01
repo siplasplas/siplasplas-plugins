@@ -70,10 +70,16 @@ from the Kate data shared by the programs using qcodeedit
 (`~/.local/share/kate-data`, downloaded by such programs), with the Kate
 theme matching the desktop (Breeze Light or Dark); without the data, C and
 C++ files get a small built-in highlighter. An `EditorViewListener` set on
-the view is told when the text becomes modified or saved, when the cursor
-moves, when the file changes (opened, saved under another name) and when the
-encoding or line breaks change. Spell checking, search and replace and
-encrypted files are not part of it.
+the view is told when the text becomes modified or saved, when it changes,
+when the cursor moves, when the file changes (opened, saved under another
+name) and when the encoding or line breaks change. Spell checking, search and
+replace and encrypted files are not part of it.
+
+`setMarks()` underlines ranges of the text with a wavy line — errors red,
+warnings amber, information blue, hints grey — and shows their messages when
+the mouse rests on them, e.g. a language server's diagnostics. The marks
+replace those set before, and an edit removes them until they are set again
+for the new text.
 
 Encoding detection reads cpg's language models, installed next to the plugin
 in `spp-editor/cpg`.

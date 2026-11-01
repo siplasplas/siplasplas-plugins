@@ -474,10 +474,10 @@ TEST(ArchivePluginTest, PacksZipWithAPassword)
     EXPECT_EQ(plugin()->readEntry(path, "d/a.txt", &out, -1, error, [](const QString&) { return QString("secret"); }), 11);
     EXPECT_EQ(out.data(), "hello world");
 
-    // Only zip encrypts.
-    options.format = "7z";
-    EXPECT_FALSE(plugin()->pack(dir.filePath("secret.7z"), dir.path(), {"d"}, options, error));
-    EXPECT_FALSE(QFileInfo::exists(dir.filePath("secret.7z")));
+    // tar cannot be encrypted (7z can, by the 7z program: test_external_tools).
+    options.format = "tar.gz";
+    EXPECT_FALSE(plugin()->pack(dir.filePath("secret.tar.gz"), dir.path(), {"d"}, options, error));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("secret.tar.gz")));
 }
 
 TEST(ArchivePluginTest, SplitsIntoVolumesAndReadsThem)

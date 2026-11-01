@@ -2,7 +2,9 @@
 // The archive plugin on libarchive.
 
 #include "siplasplas/plugin/ArchivePlugin.h"
+#include "ExternalTools.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -37,6 +39,7 @@ struct PasswordState {
     const spp::ArchivePassword* ask = nullptr;
     QString archivePath;
     QByteArray current;  // kept alive while libarchive uses it
+    bool declined = false;  // asked, and given none: no other reader tries
 };
 
 const char* passphraseCallback(struct archive*, void* data)
@@ -45,8 +48,10 @@ const char* passphraseCallback(struct archive*, void* data)
     if (!state->ask || !*state->ask)
         return nullptr;
     const QString password = (*state->ask)(state->archivePath);
-    if (password.isEmpty())
+    if (password.isEmpty()) {
+        state->declined = true;
         return nullptr;
+    }
     state->current = password.toUtf8();
     return state->current.constData();
 }
@@ -431,8 +436,16 @@ class LibarchivePlugin : public QObject, public spp::ArchivePlugin {
 public:
     QString name() const override
     {
-        return QStringLiteral("libarchive %1")
-            .arg(QString::fromLatin1(archive_version_details()).section(QLatin1Char(' '), 1, 1));
+        QString text = QStringLiteral("libarchive %1")
+                           .arg(QString::fromLatin1(archive_version_details()).section(QLatin1Char(' '), 1, 1));
+        QStringList tools;
+        for (const char* program : {"lsar", "7z", "unar"}) {
+            if (spp::tools::installed(QString::fromLatin1(program)))
+                tools << QString::fromLatin1(program);
+        }
+        if (!tools.isEmpty())
+            text += QStringLiteral(" (and %1)").arg(tools.join(QLatin1String(", ")));
+        return text;
     }
 
     QList<spp::ArchiveFormat> formats() const override
@@ -451,7 +464,8 @@ public:
         // Written: see kWriteFormats.
         return {
             format("zip", "ZIP", {"zip"}, true, true),
-            format("7z", "7-Zip", {"7z"}, true),
+            // Encrypted by the 7z program, when installed.
+            format("7z", "7-Zip", {"7z"}, true, spp::tools::installed(QStringLiteral("7z"))),
             format("tar", "tar", {"tar"}, true),
             format("tar.gz", "tar + gzip", {"tar.gz", "tgz"}, true),
             format("tar.bz2", "tar + bzip2", {"tar.bz2", "tbz2", "tbz"}, true),
@@ -474,6 +488,94 @@ public:
               const spp::ArchiveProgress& progress, const spp::ArchivePassword& password) override
     {
         PasswordState passwordState{&password, archivePath, {}};
+        if (listLib(archivePath, items, error, progress, passwordState))
+            return true;
+        if (!useTools(error, passwordState))
+            return false;
+        // Another reader; what libarchive read stays when it fails too.
+        QList<spp::ArchiveItem> found;
+        QString toolError;
+        if (spp::tools::list(archivePath, found, toolError, progress, password)) {
+            items = found;
+            error.clear();
+            return true;
+        }
+        // Cancelled, or libarchive read nothing: the programs' reason says more.
+        if (toolError == cancelled() || items.isEmpty())
+            error = toolError.isEmpty() ? error : toolError;
+        return false;
+    }
+
+    bool extract(const QString& archivePath, const QString& destDir, const QStringList& entries,
+                 QString& error, const spp::ArchiveProgress& progress,
+                 const spp::ArchivePassword& password,
+                 const spp::ExtractConflictHandler& conflict) override
+    {
+        PasswordState passwordState{&password, archivePath, {}};
+        QSet<QString> written;
+        if (extractLib(archivePath, destDir, entries, error, progress, passwordState, conflict, written))
+            return true;
+        if (!useTools(error, passwordState))
+            return false;
+        return spp::tools::extract(archivePath, destDir, entries, error, progress, password, conflict, written);
+    }
+
+    qint64 readEntry(const QString& archivePath, const QString& entryName, QIODevice* out,
+                     qint64 maxBytes, QString& error, const spp::ArchivePassword& password) override
+    {
+        PasswordState passwordState{&password, archivePath, {}};
+        qint64 written = 0;
+        bool answered = false;
+        const qint64 n = readEntryLib(archivePath, entryName, out, maxBytes, error, passwordState, written,
+                                      answered);
+        // Only when nothing was written yet: `out` cannot be taken back.
+        if (n >= 0 || answered || written > 0 || !useTools(error, passwordState))
+            return n;
+        return spp::tools::readEntry(archivePath, entryName, out, maxBytes, error, password);
+    }
+
+    bool readEntries(const QString& archivePath, const QString& stopAt, qint64 maxBytes,
+                     const spp::EntryWanted& wanted, const spp::EntryStart& start, QString& error,
+                     const spp::ArchiveProgress& progress, const spp::ArchivePassword& password) override
+    {
+        PasswordState passwordState{&password, archivePath, {}};
+        QSet<QString> given;
+        const auto startOnce = [&](const spp::ArchiveItem& item, const QByteArray& data) {
+            given.insert(item.path);
+            if (start)
+                start(item, data);
+        };
+        bool answered = false;
+        if (readEntriesLib(archivePath, stopAt, maxBytes, wanted, startOnce, error, progress, passwordState,
+                           answered))
+            return true;
+        if (answered || stopAt.isEmpty() || given.contains(stopAt) || !useTools(error, passwordState))
+            return false;
+        // By a program: only the file stopped at.
+        QBuffer buffer;
+        buffer.open(QIODevice::WriteOnly);
+        if (spp::tools::readEntry(archivePath, stopAt, &buffer, maxBytes, error, password) < 0)
+            return false;
+        spp::ArchiveItem item;
+        item.path = stopAt;
+        item.size = buffer.size();
+        if (start)
+            start(item, buffer.data());
+        error.clear();
+        return true;
+    }
+
+private:
+    // After libarchive failed: whether the external programs may try. Not
+    // when the user cancelled or gave no password.
+    static bool useTools(const QString& error, const PasswordState& passwordState)
+    {
+        return error != cancelled() && !passwordState.declined;
+    }
+
+    bool listLib(const QString& archivePath, QList<spp::ArchiveItem>& items, QString& error,
+                 const spp::ArchiveProgress& progress, PasswordState& passwordState)
+    {
         ArchivePtr a = openForReading(archivePath, passwordState, error);
         if (!a)
             return false;
@@ -505,12 +607,11 @@ public:
         return true;
     }
 
-    bool extract(const QString& archivePath, const QString& destDir, const QStringList& entries,
-                 QString& error, const spp::ArchiveProgress& progress,
-                 const spp::ArchivePassword& password,
-                 const spp::ExtractConflictHandler& conflict) override
+    // `written`: the files written, for the programs trying after a failure.
+    bool extractLib(const QString& archivePath, const QString& destDir, const QStringList& entries,
+                    QString& error, const spp::ArchiveProgress& progress, PasswordState& passwordState,
+                    const spp::ExtractConflictHandler& conflict, QSet<QString>& written)
     {
-        PasswordState passwordState{&password, archivePath, {}};
         ArchivePtr a = openForReading(archivePath, passwordState, error);
         if (!a)
             return false;
@@ -594,6 +695,7 @@ public:
                 error = QObject::tr("Cannot write '%1': %2").arg(target, file.errorString());
                 return false;
             }
+            written.insert(target);
             char buffer[64 * 1024];
             for (;;) {
                 const la_ssize_t n = archive_read_data(a.get(), buffer, sizeof buffer);
@@ -631,10 +733,15 @@ public:
         return true;
     }
 
-    qint64 readEntry(const QString& archivePath, const QString& entryName, QIODevice* out,
-                     qint64 maxBytes, QString& error, const spp::ArchivePassword& password) override
+    // `written`: bytes written to `out`, also when it fails. `answered`: the
+    // archive was read and the entry is not there or not a file, which no
+    // other reader changes.
+    qint64 readEntryLib(const QString& archivePath, const QString& entryName, QIODevice* out,
+                        qint64 maxBytes, QString& error, PasswordState& passwordState, qint64& written,
+                        bool& answered)
     {
-        PasswordState passwordState{&password, archivePath, {}};
+        written = 0;
+        answered = false;
         ArchivePtr a = openForReading(archivePath, passwordState, error);
         if (!a)
             return -1;
@@ -648,10 +755,10 @@ public:
             }
             if (archive_entry_filetype(entry) != AE_IFREG) {
                 error = QObject::tr("'%1' is not a file").arg(entryName);
+                answered = true;
                 return -1;
             }
             // Stops after maxBytes: the rest of the entry is not decompressed.
-            qint64 written = 0;
             char buffer[64 * 1024];
             while (maxBytes < 0 || written < maxBytes) {
                 const qint64 want = maxBytes < 0 ? qint64(sizeof buffer)
@@ -671,16 +778,17 @@ public:
             }
             return written;
         }
-        error = status == ARCHIVE_EOF ? QObject::tr("'%1' is not in the archive").arg(entryName)
-                                      : errorOf(a.get());
+        answered = status == ARCHIVE_EOF;
+        error = answered ? QObject::tr("'%1' is not in the archive").arg(entryName) : errorOf(a.get());
         return -1;
     }
 
-    bool readEntries(const QString& archivePath, const QString& stopAt, qint64 maxBytes,
-                     const spp::EntryWanted& wanted, const spp::EntryStart& start, QString& error,
-                     const spp::ArchiveProgress& progress, const spp::ArchivePassword& password) override
+    // `answered`: as for readEntryLib.
+    bool readEntriesLib(const QString& archivePath, const QString& stopAt, qint64 maxBytes,
+                        const spp::EntryWanted& wanted, const spp::EntryStart& start, QString& error,
+                        const spp::ArchiveProgress& progress, PasswordState& passwordState, bool& answered)
     {
-        PasswordState passwordState{&password, archivePath, {}};
+        answered = false;
         ArchivePtr a = openForReading(archivePath, passwordState, error);
         if (!a)
             return false;
@@ -720,6 +828,7 @@ public:
                     start(item, data);
             } else if (last) {
                 error = QObject::tr("'%1' is not a file").arg(stopAt);
+                answered = true;
                 return false;
             }
             if (last)
@@ -731,15 +840,20 @@ public:
         }
         if (!stopAt.isEmpty()) {
             error = QObject::tr("'%1' is not in the archive").arg(stopAt);
+            answered = true;
             return false;
         }
         return true;
     }
 
+public:
     bool pack(const QString& archivePath, const QString& baseDir, const QStringList& files,
               const spp::PackOptions& options, QString& error,
               const spp::ArchiveProgress& progress) override
     {
+        // libarchive writes neither an encrypted 7z nor solid blocks of a size.
+        if (options.format == QLatin1String("7z") && (!options.password.isEmpty() || options.solidBlockSize > 0))
+            return spp::tools::pack7z(archivePath, baseDir, files, options, error, progress);
         const WriteFormat* format = writeFormat(options.format);
         if (!format) {
             error = QObject::tr("Cannot write the format '%1'").arg(options.format);

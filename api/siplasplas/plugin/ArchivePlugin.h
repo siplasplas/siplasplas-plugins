@@ -12,6 +12,14 @@
 // name.002, ...; RAR's name.part1.rar, name.part2.rar, ... (any width of the
 // number); the old RAR naming name.rar, name.r00, name.r01, ... Progress
 // totals count all of them.
+//
+// What libarchive cannot read, or reads only in part (ARJ, ACE, encrypted
+// RAR and 7z, solid RAR 1.5), the plugin reads by external programs when
+// they are installed: lsar (unar) and 7z; the calls stay the same, passwords
+// asked through ArchivePassword as well, once a call (given to the programs
+// on their command lines: 7z reads one it asks for only from a terminal).
+// Their progress is coarser (7z's percentages; listing: none), and
+// readEntries() gives only the file stopped at.
 
 #include <QByteArray>
 #include <QDateTime>
@@ -73,6 +81,11 @@ struct PackOptions {
     int level = -1;           // compression level, -1 the format's default
     QString password;         // empty: none (formats with canEncrypt only)
     qint64 volumeSize = 0;    // > 0: split into volumes .001, .002, ... of this size
+    // 7z: > 0 limits solid blocks to this many bytes; 0 makes one block of
+    // the whole archive. With a password or a block size 7z is written by
+    // the 7z program (libarchive writes neither), the file names encrypted
+    // too.
+    qint64 solidBlockSize = 0;
 };
 
 class ArchivePlugin {
@@ -133,7 +146,7 @@ public:
 
 // The number changes with the interface: plugins built for another one are
 // not loaded.
-#define SPP_ARCHIVE_PLUGIN_IID "io.github.siplasplas.plugins.ArchivePlugin/2"
+#define SPP_ARCHIVE_PLUGIN_IID "io.github.siplasplas.plugins.ArchivePlugin/3"
 Q_DECLARE_INTERFACE(spp::ArchivePlugin, SPP_ARCHIVE_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_ARCHIVEPLUGIN_H

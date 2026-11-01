@@ -18,8 +18,10 @@ symbolic link, are left out.
 
 The archive plugin reads zip (also with a password), 7z, tar with gzip,
 bzip2, xz, Zstandard, LZ4, lzip or compress, RAR without encryption, CAB,
-LHA/LZH, ISO 9660, XAR, cpio and ar; an archive split into volumes
-(`name.001`, `name.002`, ...) is read from its first volume. Formats
+LHA/LZH, ISO 9660, XAR, cpio and ar. An archive split into volumes is read
+as one from whichever volume is given: `name.001`, `name.002`, ... (7-Zip),
+RAR's `name.part1.rar`, `name.part2.rar`, ... and the old `name.rar`,
+`name.r00`, `name.r01`, ... (RAR 4 and 5, files spanning volumes too). Formats
 libarchive does not read — ARJ, ACE, encrypted RAR and 7z — are left to
 external programs (`unar`, `unrar`, `7z`) by the program using the plugin.
 

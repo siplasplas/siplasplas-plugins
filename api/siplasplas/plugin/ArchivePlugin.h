@@ -7,8 +7,11 @@
 // do not depend on the archive library (libarchive).
 //
 // Only Qt and standard types cross the boundary. The plugin keeps no state
-// between calls: they may run on several threads at once. An archive path
-// ending in .001 is read with the volumes after it (.002, .003, ...).
+// between calls: they may run on several threads at once. An archive in
+// volumes is read from its first volume whichever is given: name.001,
+// name.002, ...; RAR's name.part1.rar, name.part2.rar, ... (any width of the
+// number); the old RAR naming name.rar, name.r00, name.r01, ... Progress
+// totals count all of them.
 
 #include <QByteArray>
 #include <QDateTime>

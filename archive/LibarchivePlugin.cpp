@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QIODevice>
 #include <QObject>
+#include <QRegularExpression>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -55,16 +56,51 @@ QString volumeName(const QString& base, int index)
     return QStringLiteral("%1.%2").arg(base).arg(index, 3, 10, QLatin1Char('0'));
 }
 
-// The files of the archive: name.001 and the volumes after it, else `path`.
+// The files of an archive in volumes, from the first one whichever is
+// given: name.001, name.002, ... (split by 7-Zip or pack()); RAR's
+// name.part1.rar, name.part2.rar, ... (any width of the number); and the old
+// RAR naming name.rar, name.r00, name.r01, ... Else just `path`.
 QStringList volumesOf(const QString& path)
 {
-    if (!path.endsWith(QLatin1String(".001")))
-        return {path};
-    const QString base = path.chopped(4);
+    static const QRegularExpression numbered(QStringLiteral("^(.*)\\.(\\d{3})$"));
+    static const QRegularExpression rarPart(QStringLiteral("^(.*\\.part)(\\d+)\\.rar$"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression oldRarPart(QStringLiteral("^(.*)\\.([rR])\\d\\d$"));
+    // name.r01 given: the archive starts at name.rar.
+    if (const auto m = oldRarPart.match(path); m.hasMatch()) {
+        for (const char* suffix : {".rar", ".RAR"}) {
+            const QString first = m.captured(1) + QLatin1String(suffix);
+            if (QFileInfo::exists(first))
+                return volumesOf(first);
+        }
+    }
     QStringList result;
-    for (int i = 1; QFileInfo::exists(volumeName(base, i)); ++i)
-        result << volumeName(base, i);
-    return result;
+    if (const auto m = numbered.match(path); m.hasMatch()) {
+        const QString base = m.captured(1);
+        for (int i = 1; QFileInfo::exists(volumeName(base, i)); ++i)
+            result << volumeName(base, i);
+    } else if (const auto m = rarPart.match(path); m.hasMatch()) {
+        const int width = int(m.captured(2).size());
+        const QString suffix = path.right(4);  // ".rar", as written
+        for (int i = 1;; ++i) {
+            const QString part = m.captured(1) + QStringLiteral("%1").arg(i, width, 10, QLatin1Char('0')) + suffix;
+            if (!QFileInfo::exists(part))
+                break;
+            result << part;
+        }
+    } else if (path.endsWith(QLatin1String(".rar"), Qt::CaseInsensitive)) {
+        const QString base = path.chopped(4);
+        const QChar r = path.at(path.size() - 3);  // 'r' or 'R'
+        for (int i = 0; i < 100; ++i) {
+            const QString part = QStringLiteral("%1.%2%3").arg(base).arg(r).arg(i, 2, 10, QLatin1Char('0'));
+            if (!QFileInfo::exists(part))
+                break;
+            if (result.isEmpty())
+                result << path;
+            result << part;
+        }
+    }
+    return result.isEmpty() ? QStringList{path} : result;
 }
 
 // The size of all files of the archive, for progress.

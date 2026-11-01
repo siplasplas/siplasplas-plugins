@@ -495,6 +495,46 @@ TEST(ArchivePluginTest, SplitsIntoVolumesAndReadsThem)
     }
 }
 
+TEST(ArchivePluginTest, FindsVolumesByTheirNames)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    QByteArray data(250 * 1000, '\0');
+    quint32 seed = 7;
+    for (char& c : data) {
+        seed = seed * 1103515245 + 12345;
+        c = char(seed >> 24);
+    }
+    putFile(dir.filePath("big.bin"), data);
+    spp::PackOptions options;
+    options.format = "tar";
+    options.volumeSize = 100 * 1000;
+    QString error;
+    ASSERT_TRUE(plugin()->pack(dir.filePath("split.tar"), dir.path(), {"big.bin"}, options, error));
+    // The same three parts named as RAR names its volumes: libarchive goes by
+    // the contents, so this checks only how the volumes are found.
+    const QStringList parts = {"split.tar.001", "split.tar.002", "split.tar.003"};
+    const QList<QStringList> namings = {
+        {"new.part1.rar", "new.part2.rar", "new.part3.rar"},
+        {"pad.part001.rar", "pad.part002.rar", "pad.part003.rar"},
+        {"old.rar", "old.r00", "old.r01"},
+    };
+    for (const QStringList& names : namings) {
+        for (int i = 0; i < 3; ++i)
+            ASSERT_TRUE(QFile::copy(dir.filePath(parts[i]), dir.filePath(names[i])));
+    }
+    // Any volume given: all of them, from the first.
+    for (const QString& given : {QString("split.tar.002"), QString("new.part1.rar"), QString("new.part3.rar"),
+                                 QString("pad.part002.rar"), QString("old.rar"), QString("old.r01")}) {
+        SCOPED_TRACE(given.toStdString());
+        QBuffer out;
+        out.open(QIODevice::WriteOnly);
+        EXPECT_EQ(plugin()->readEntry(dir.filePath(given), "big.bin", &out, -1, error), data.size())
+            << error.toStdString();
+        EXPECT_EQ(out.data(), data);
+    }
+}
+
 TEST(ArchivePluginTest, CompressionLevel)
 {
     ASSERT_NE(plugin(), nullptr);

@@ -9,7 +9,12 @@ Shared Qt 6 plugins and their interfaces for
 
 | Plugin | Interface | Needs | Does |
 |--------|-----------|-------|------|
-| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords) and reads the start of an entry without decompressing the rest, for previews; extracting and packing follow |
+| `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev) | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews; packing follows |
+
+Extracting keeps the entries' times and permissions (also of read-only
+directories, set at the end), makes symbolic links, and never writes outside
+the destination: entries with `..` or absolute paths, and entries below a
+symbolic link, are left out.
 
 The archive plugin reads zip (also with a password), 7z, tar with gzip,
 bzip2, xz, Zstandard, LZ4, lzip or compress, RAR without encryption, CAB,

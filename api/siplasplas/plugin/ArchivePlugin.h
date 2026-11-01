@@ -81,7 +81,9 @@ public:
 
     // Extracts `entries` (paths as list() gives them; a directory with its
     // contents; empty: all) into `destDir`, with their paths below it.
-    // Entries whose paths leave `destDir` ("..", absolute) are not written.
+    // Entries whose paths leave `destDir` ("..", absolute, below a symbolic
+    // link) are not written. Without `conflict` existing files are
+    // overwritten; Cancel stops with the error "Cancelled".
     virtual bool extract(const QString& archivePath, const QString& destDir, const QStringList& entries,
                          QString& error, const ArchiveProgress& progress = {},
                          const ArchivePassword& password = {},

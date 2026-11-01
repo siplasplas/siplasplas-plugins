@@ -28,6 +28,7 @@ struct Entry {
     QByteArray data;            // for a file
     bool isDirectory = false;
     QString linkTarget;         // for a symbolic link
+    quint32 perm = 0;           // 0: 0755 for directories, 0644 for files
 };
 
 // Writes an archive with libarchive: `format` e.g. "pax" or "zip", `filter`
@@ -54,14 +55,14 @@ bool writeArchive(const QString& path, const char* format, const char* filter,
         archive_entry_set_mtime(entry, 1700000000, 0);
         if (e.isDirectory) {
             archive_entry_set_filetype(entry, AE_IFDIR);
-            archive_entry_set_perm(entry, 0755);
+            archive_entry_set_perm(entry, e.perm ? e.perm : 0755);
         } else if (!e.linkTarget.isEmpty()) {
             archive_entry_set_filetype(entry, AE_IFLNK);
             archive_entry_set_perm(entry, 0777);
             archive_entry_set_symlink_utf8(entry, e.linkTarget.toUtf8().constData());
         } else {
             archive_entry_set_filetype(entry, AE_IFREG);
-            archive_entry_set_perm(entry, 0644);
+            archive_entry_set_perm(entry, e.perm ? e.perm : 0644);
             archive_entry_set_size(entry, e.data.size());
         }
         archive_write_header(a, entry);
@@ -189,6 +190,152 @@ TEST(ArchivePluginTest, AsksForThePassword)
     QBuffer none;
     none.open(QIODevice::WriteOnly);
     EXPECT_EQ(plugin()->readEntry(path, "a.txt", &none, -1, error, [](const QString&) { return QString(); }), -1);
+}
+
+namespace {
+
+QByteArray contents(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray("<none>");
+}
+
+} // namespace
+
+TEST(ArchivePluginTest, ExtractsAll)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("a.tar.gz");
+    ASSERT_TRUE(writeArchive(path, "pax", "gzip", kTree));
+    const QString dest = dir.filePath("out");
+
+    QString error;
+    int progressCalls = 0;
+    ASSERT_TRUE(plugin()->extract(path, dest, {}, error, [&](qint64, qint64, const QString&) {
+        ++progressCalls;
+        return true;
+    })) << error.toStdString();
+    EXPECT_GT(progressCalls, 0);
+
+    EXPECT_EQ(contents(dest + "/d/a.txt"), "hello world");
+    EXPECT_EQ(contents(dest + QString::fromUtf8("/d/sub/zażółć.txt")), "x");
+    EXPECT_EQ(QFileInfo(dest + "/d/link").symLinkTarget(), QFileInfo(dest + "/d/a.txt").absoluteFilePath());
+    const QFileInfo a(dest + "/d/a.txt");
+    EXPECT_EQ(a.lastModified().toSecsSinceEpoch(), 1700000000);
+    EXPECT_FALSE(a.permissions() & QFileDevice::WriteOther);
+    EXPECT_TRUE(a.permissions() & QFileDevice::ReadOther);
+    EXPECT_EQ(QFileInfo(dest + "/d").lastModified().toSecsSinceEpoch(), 1700000000);
+}
+
+TEST(ArchivePluginTest, ExtractsSelectedEntries)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("a.zip");
+    ASSERT_TRUE(writeArchive(path, "zip", "none", kTree));
+    const QString dest = dir.filePath("out");
+
+    QString error;
+    ASSERT_TRUE(plugin()->extract(path, dest, {"d/sub"}, error)) << error.toStdString();
+    EXPECT_EQ(contents(dest + QString::fromUtf8("/d/sub/zażółć.txt")), "x");
+    EXPECT_FALSE(QFileInfo::exists(dest + "/d/a.txt"));
+    // "d/s" is not a parent of "d/sub".
+    QTemporaryDir other;
+    ASSERT_TRUE(plugin()->extract(path, other.path(), {"d/s"}, error));
+    EXPECT_TRUE(QDir(other.path()).isEmpty());
+}
+
+TEST(ArchivePluginTest, AsksAboutExistingTargets)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("a.tar");
+    ASSERT_TRUE(writeArchive(path, "pax", "none", {{"a.txt", "new", false, {}}, {"b.txt", "new", false, {}}}));
+    const QString dest = dir.filePath("out");
+    const auto reset = [&] {
+        QDir(dest).removeRecursively();
+        QDir().mkpath(dest);
+        QFile a(dest + "/a.txt");
+        ASSERT_TRUE(a.open(QIODevice::WriteOnly));
+        a.write("old");
+    };
+    QString error;
+    QStringList asked;
+    const auto answer = [&](spp::ExtractConflict choice) {
+        return [&asked, choice](const spp::ArchiveItem& item, const QString&) {
+            asked << item.path;
+            return choice;
+        };
+    };
+
+    reset();
+    ASSERT_TRUE(plugin()->extract(path, dest, {}, error, {}, {}, answer(spp::ExtractConflict::Skip)));
+    EXPECT_EQ(asked, QStringList{"a.txt"});
+    EXPECT_EQ(contents(dest + "/a.txt"), "old");
+    EXPECT_EQ(contents(dest + "/b.txt"), "new");
+
+    reset();
+    ASSERT_TRUE(plugin()->extract(path, dest, {}, error, {}, {}, answer(spp::ExtractConflict::Overwrite)));
+    EXPECT_EQ(contents(dest + "/a.txt"), "new");
+
+    reset();
+    EXPECT_FALSE(plugin()->extract(path, dest, {}, error, {}, {}, answer(spp::ExtractConflict::Cancel)));
+    EXPECT_EQ(error, "Cancelled");
+    EXPECT_EQ(contents(dest + "/a.txt"), "old");
+    EXPECT_FALSE(QFileInfo::exists(dest + "/b.txt"));
+}
+
+TEST(ArchivePluginTest, StaysInsideTheDestination)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString outside = dir.filePath("outside");
+    QDir().mkpath(outside);
+    const QString path = dir.filePath("evil.tar");
+    ASSERT_TRUE(writeArchive(path, "pax", "none", {
+        {"../evil.txt", "evil", false, {}},
+        {"d/../../evil2.txt", "evil", false, {}},
+        {"d/out", {}, false, outside},       // a link out of the destination...
+        {"d/out/x.txt", "evil", false, {}},  // ...and a file written through it
+        {"d/ok.txt", "ok", false, {}},
+    }));
+    const QString dest = dir.filePath("out");
+
+    QString error;
+    ASSERT_TRUE(plugin()->extract(path, dest, {}, error)) << error.toStdString();
+    EXPECT_EQ(contents(dest + "/d/ok.txt"), "ok");
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("evil.txt")));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath("evil2.txt")));
+    EXPECT_FALSE(QFileInfo::exists(outside + "/x.txt"));
+}
+
+TEST(ArchivePluginTest, ExtractsIntoReadOnlyDirectories)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("ro.tar");
+    ASSERT_TRUE(writeArchive(path, "pax", "none", {{"ro", {}, true, {}, 0555}, {"ro/f.txt", "f", false, {}}}));
+    const QString dest = dir.filePath("out");
+
+    QString error;
+    ASSERT_TRUE(plugin()->extract(path, dest, {}, error)) << error.toStdString();
+    EXPECT_EQ(contents(dest + "/ro/f.txt"), "f");
+    EXPECT_FALSE(QFileInfo(dest + "/ro").permissions() & QFileDevice::WriteOwner);
+    QFile::setPermissions(dest + "/ro", QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+}
+
+TEST(ArchivePluginTest, CancelsExtracting)
+{
+    ASSERT_NE(plugin(), nullptr);
+    QTemporaryDir dir;
+    const QString path = dir.filePath("a.tar.gz");
+    ASSERT_TRUE(writeArchive(path, "pax", "gzip", kTree));
+
+    QString error;
+    EXPECT_FALSE(plugin()->extract(path, dir.filePath("out"), {}, error,
+                                   [](qint64, qint64, const QString&) { return false; }));
+    EXPECT_EQ(error, "Cancelled");
 }
 
 int main(int argc, char** argv)

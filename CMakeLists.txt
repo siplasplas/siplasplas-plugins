@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(siplasplas-plugins VERSION 0.8.0 LANGUAGES CXX)
+project(siplasplas-plugins VERSION 0.9.0 LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 17)
@@ -33,6 +33,9 @@ option(SPP_BUILD_ARCHIVE "Build the archive plugin (needs libarchive)" ON)
 # asks for it (-DSPP_BUILD_EDITOR=ON) only when it does not link qcodeedit
 # itself, which would put two copies of it into one process.
 option(SPP_BUILD_EDITOR "Build the editor plugin (fetches qcodeedit; needs Qt Widgets, ICU)" ${PROJECT_IS_TOP_LEVEL})
+# The find bar works on the editor plugin's editors: a program asks for it
+# (-DSPP_BUILD_FINDBAR=ON) along with the editor.
+option(SPP_BUILD_FINDBAR "Build the find bar plugin (needs Qt Widgets)" ${PROJECT_IS_TOP_LEVEL})
 # Tests (GoogleTest) when built on its own, not when fetched by a program.
 option(SPP_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 # The interface headers and CMake package are installed when built on its
@@ -67,6 +70,10 @@ endif()
 
 if(SPP_BUILD_EDITOR)
     add_subdirectory(editor)
+endif()
+
+if(SPP_BUILD_FINDBAR)
+    add_subdirectory(findbar)
 endif()
 
 if(SPP_BUILD_TESTS)

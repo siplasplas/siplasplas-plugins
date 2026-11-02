@@ -27,3 +27,18 @@ if(TARGET spp-editor)
     add_dependencies(editor_plugin_tests spp-editor)
     gtest_discover_tests(editor_plugin_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+if(TARGET spp-editor AND TARGET spp-findbar)
+    # The find bar (its sources built in) on an editor of the editor plugin.
+    add_executable(findbar_plugin_tests test_findbar_plugin.cpp
+        ${PROJECT_SOURCE_DIR}/findbar/FindBarWidget.cpp ${PROJECT_SOURCE_DIR}/findbar/FindBarWidget.h)
+    set_target_properties(findbar_plugin_tests PROPERTIES AUTOMOC ON)
+    target_include_directories(findbar_plugin_tests PRIVATE ${PROJECT_SOURCE_DIR}/findbar)
+    target_compile_definitions(findbar_plugin_tests PRIVATE
+        SPP_EDITOR_PLUGIN_FILE="$<TARGET_FILE:spp-editor>"
+        SPP_FINDBAR_PLUGIN_FILE="$<TARGET_FILE:spp-findbar>")
+    target_link_libraries(findbar_plugin_tests PRIVATE
+        siplasplas::plugin-api Qt6::Widgets GTest::gtest)
+    add_dependencies(findbar_plugin_tests spp-editor spp-findbar)
+    gtest_discover_tests(findbar_plugin_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

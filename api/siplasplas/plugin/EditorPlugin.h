@@ -32,6 +32,18 @@ struct TextPosition {
     int column = 0;
 };
 
+// A range of the text: from `start` to just before `end`.
+struct TextRange {
+    TextPosition start;
+    TextPosition end;
+};
+
+// A range of the text and what replaces it.
+struct TextReplacement {
+    TextRange range;
+    QString text;
+};
+
 // A range of the text marked with a message, e.g. a language server's
 // diagnostic: underlined, its message shown when the mouse rests on it.
 struct TextMark {
@@ -123,6 +135,19 @@ public:
     // The whole text, lines joined by "\n".
     virtual QString text() const = 0;
 
+    // The selected range, start before end; false (and the cursor's empty
+    // range) without a selection.
+    virtual bool selection(TextRange* range) const = 0;
+    // Selects the range, the cursor at its end, and scrolls to it.
+    virtual void setSelection(TextRange range) = 0;
+    // Highlights the ranges, e.g. a search's matches, replacing those set
+    // before; an edit removes them until they are set again.
+    virtual void setHighlights(const QList<TextRange>& ranges) = 0;
+    // Replaces the ranges (in the order of the text, not overlapping) as one
+    // undo step named `undoText`; false, doing nothing, in a read-only view
+    // or with nothing to replace.
+    virtual bool replace(const QList<TextReplacement>& replacements, const QString& undoText) = 0;
+
     // Underlines the ranges (errors red, warnings amber, information blue,
     // hints grey) and shows their messages when the mouse rests on them;
     // replaces the marks set before. An edit removes them all, until they
@@ -154,7 +179,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/4"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/5"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

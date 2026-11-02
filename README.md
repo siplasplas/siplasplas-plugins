@@ -12,6 +12,7 @@ dependencies (e.g. libarchive) out of the programs, which work without it.
 |--------|-----------|-------|------|
 | `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev); optionally `lsar`/`unar` (unar) and `7z` (p7zip-full or 7zip) at run time | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews — also of every file on the way to it (`readEntries`), which a solid archive decompresses anyway; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
 | `spp-editor` | `spp::EditorPlugin`, `spp::EditorView` (`siplasplas/plugin/EditorPlugin.h`) | Qt Widgets; [qcodeedit](https://github.com/siplasplas/qcodeedit) 1.70 with [cpg](https://github.com/siplasplas/cpg), fetched and built in (ICU, libicu-dev) | a code editor widget for the program's own window and tabs: opens and saves files in their encoding, colours them with Kate syntax definitions and the Kate theme matching the desktop, reloads files changed on disk as one undo step; see below |
+| `spp-findbar` | `spp::FindPlugin`, `spp::FindBar` (`siplasplas/plugin/FindPlugin.h`) | Qt Widgets | a find and replace bar for the editor plugin's editors, through their interface only; see below |
 
 Extracting keeps the entries' times and permissions (also of read-only
 directories, set at the end), makes symbolic links, and never writes outside
@@ -95,6 +96,28 @@ is an ordinary click.
 Encoding detection reads cpg's language models, installed next to the plugin
 in `spp-editor/cpg`.
 
+The view also selects and gives its selection, highlights ranges (e.g. a
+search's matches; an edit removes them) and replaces ranges as one undo step.
+
+### The find bar plugin
+
+`FindPlugin::createFindBar()` gives a bar for the program to put into its
+window, under the editors; `setEditor()` tells it which `EditorView` it works
+on (the current tab's). `showFind()` and `showReplace()` show it with the
+editor's selection, within a line, as the text sought. It seeks as one types
+and highlights every match, selecting the first from where the search began;
+it says "3 of 17" (or "No matches", or "Invalid" for a wrong regular
+expression). Options: match case (Alt+C), whole words (Alt+W), regular
+expression (Alt+X). Enter and the ↓ button go to the next match, Shift+Enter
+and ↑ to the previous one, around the end; `findNext()` and `findPrevious()`
+do it for the program's keys (F3, Shift+F3). For replacing: Replace replaces
+the selected match and selects the next one (Enter in the replacement does
+it too), Replace All replaces them all as one undo step. In the replacement
+of a regular expression `$1` or `\1` is its group (`$0` the whole match),
+`\n` a line break, `\t` a tab, `\\` and `$$` themselves. Escape closes the bar
+and returns to the editor. The program tells the bar of edits
+(`editorTextChanged()`), after which the matches are sought again.
+
 ## Interfaces
 
 The interfaces are headers in `api/` (CMake target
@@ -122,10 +145,12 @@ FetchContent may set `SPP_PLUGIN_BUILD_DIR` and `SPP_PLUGIN_INSTALL_DIR`
 before, to put the plugins into its own plugin directory, and links
 `siplasplas::plugin-api`; only the plugins are installed then (the headers
 and CMake package with `-DSPP_INSTALL_API=ON`). `-DSPP_BUILD_ARCHIVE=OFF`
-leaves the archive plugin out, `-DSPP_BUILD_EDITOR=OFF` the editor plugin.
+leaves the archive plugin out, `-DSPP_BUILD_EDITOR=OFF` the editor plugin,
+`-DSPP_BUILD_FINDBAR=OFF` the find bar.
 A program fetching the repository gets the editor plugin only when it sets
 `SPP_BUILD_EDITOR` to `ON`, which it does only when it does not link
-qcodeedit itself (two copies of it in one process do not go together).
+qcodeedit itself (two copies of it in one process do not go together), and
+the find bar when it sets `SPP_BUILD_FINDBAR`.
 The editor plugin fetches qcodeedit (and through it cpg and DiffMerge's
 diff library) from GitHub and builds the parts it uses into the plugin, with
 position-independent code; `-DFETCHCONTENT_SOURCE_DIR_QCODEEDIT=<path>`

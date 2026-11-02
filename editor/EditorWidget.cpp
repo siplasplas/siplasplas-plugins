@@ -28,6 +28,7 @@ namespace {
 // qcodeedit-spell's (100, 101).
 constexpr int MarksLayer = 110;
 constexpr int LinkLayer = 111;
+constexpr int HighlightsLayer = 112;
 
 EditorResult toResult(qce::encoding::TextFile::Result result)
 {
@@ -211,6 +212,42 @@ void EditorWidget::setCursorPosition(TextPosition position)
 QString EditorWidget::text() const
 {
     return m_document->toPlainText();
+}
+
+bool EditorWidget::selection(TextRange* range) const
+{
+    qce::CodeEditArea* area = m_edit->area();
+    const qce::TextCursor start = area->selectionStart();
+    const qce::TextCursor end = area->selectionEnd();
+    *range = {{start.line, start.column}, {end.line, end.column}};
+    return area->hasSelection();
+}
+
+void EditorWidget::setSelection(TextRange range)
+{
+    m_edit->area()->setSelection({range.start.line, range.start.column}, {range.end.line, range.end.column});
+}
+
+void EditorWidget::setHighlights(const QList<TextRange>& ranges)
+{
+    // Matches in amber, as search matches are elsewhere.
+    QVector<qce::ExtraSelection> selections;
+    selections.reserve(ranges.size());
+    for (const TextRange& range : ranges)
+        selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column},
+                           QColor(250, 200, 60, 140), {}, {}});
+    m_edit->area()->setExtraSelections(HighlightsLayer, selections);
+}
+
+bool EditorWidget::replace(const QList<TextReplacement>& replacements, const QString& undoText)
+{
+    QList<qce::CodeEditArea::TextReplacement> edits;
+    edits.reserve(replacements.size());
+    for (const TextReplacement& replacement : replacements)
+        edits.append({{replacement.range.start.line, replacement.range.start.column},
+                      {replacement.range.end.line, replacement.range.end.column},
+                      replacement.text});
+    return m_edit->area()->replaceRanges(edits, undoText);
 }
 
 void EditorWidget::setMarks(const QList<TextMark>& marks)

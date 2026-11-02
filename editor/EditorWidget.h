@@ -54,6 +54,10 @@ public:
     QString text() const override;
     void setMarks(const QList<TextMark>& marks) override;
     void answerLink(TextPosition position, bool isLink) override;
+    bool selection(TextRange* range) const override;
+    void setSelection(TextRange range) override;
+    void setHighlights(const QList<TextRange>& ranges) override;
+    bool replace(const QList<TextReplacement>& replacements, const QString& undoText) override;
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
 

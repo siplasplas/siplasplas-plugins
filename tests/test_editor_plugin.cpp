@@ -286,6 +286,197 @@ TEST(EditorPlugin, CtrlClickFollowsALink)
     view->setListener(nullptr);
 }
 
+namespace {
+
+struct BreakpointListener : spp::EditorViewListener {
+    QList<QList<int>> told;
+    void breakpointsChanged(const QList<int>& lines) override { told << lines; }
+};
+
+// An editor shown with a file of six lines, and the column of its margin
+// and the height of its lines, found by clicking as the user does.
+struct BreakpointEditor {
+    QTemporaryDir dir;
+    spp::EditorView* view = plugin()->createEditor();
+    std::unique_ptr<QWidget> owner = editorWidget(view);
+    BreakpointListener listener;
+    QWidget* rail = nullptr;
+    QWidget* text = view->widget()->focusProxy();
+
+    BreakpointEditor()
+    {
+        view->widget()->resize(700, 400);
+        view->widget()->show();
+        view->open(write(dir, "lines.txt", "zero\none\ntwo\nthree\nfour\nfive\n"));
+        for (QWidget* child : view->widget()->findChildren<QWidget*>())
+            if (QString::fromLatin1(child->metaObject()->className()) == QLatin1String("qce::LeftRail")) rail = child;
+        view->setListener(&listener);
+    }
+    ~BreakpointEditor() { view->setListener(nullptr); }
+
+    void click(QPoint at)
+    {
+        QMouseEvent press(QEvent::MouseButtonPress, at, rail->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(rail, &press);
+    }
+    void press(int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+    {
+        type(view, key, key == Qt::Key_Return ? QStringLiteral("\r") : QString(), modifiers);
+    }
+    // The leftmost x of the margin, -1 without one; a toggled line is toggled back.
+    int marginColumn()
+    {
+        for (int x = 0; x < rail->width(); ++x) {
+            const qsizetype before = listener.told.size();
+            click({x, 3});
+            if (listener.told.size() == before) continue;
+            click({x, 3});
+            return x;
+        }
+        return -1;
+    }
+    QImage textImage() { return text->grab().toImage(); }
+};
+
+using Lines = QList<int>;
+
+} // namespace
+
+// Programs without a debugger never see the margin.
+TEST(EditorPlugin, BreakpointMarginIsHiddenByDefault)
+{
+    BreakpointEditor editor;
+    ASSERT_NE(editor.rail, nullptr);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(editor.view->hasBreakpointMargin());
+    EXPECT_EQ(editor.marginColumn(), -1);
+    EXPECT_TRUE(editor.listener.told.isEmpty());
+
+    // Nor anything set for it.
+    const QImage plain = editor.textImage();
+    editor.view->setBreakpoints({0, 1});
+    editor.view->setExecutionLine(2);
+    EXPECT_EQ(editor.textImage(), plain);
+}
+
+TEST(EditorPlugin, ClicksInTheMarginToggleBreakpoints)
+{
+    BreakpointEditor editor;
+    ASSERT_NE(editor.rail, nullptr);
+    const int width = editor.rail->sizeHint().width();
+    editor.view->setBreakpointMargin(true);
+    EXPECT_GT(editor.rail->sizeHint().width(), width);
+    QCoreApplication::processEvents();
+    const int x = editor.marginColumn();
+    ASSERT_GE(x, 0);
+    ASSERT_EQ(editor.listener.told.size(), 2);
+    EXPECT_EQ(editor.listener.told.at(0), Lines{0});
+    EXPECT_EQ(editor.listener.told.at(1), Lines{});
+    // Further down, the second line: in order, whichever came first.
+    int y = 3;
+    while (y < 100 && editor.view->breakpoints() != Lines{1}) {
+        editor.click({x + 1, ++y});
+        if (editor.view->breakpoints() == Lines{0}) editor.click({x + 1, y});
+    }
+    ASSERT_EQ(editor.view->breakpoints(), Lines{1});
+    editor.click({x + 1, 3});
+    EXPECT_EQ(editor.view->breakpoints(), (Lines{0, 1}));
+    EXPECT_EQ(editor.listener.told.last(), (Lines{0, 1}));
+    // Setting them is not told, and sorts them.
+    const qsizetype told = editor.listener.told.size();
+    editor.view->setBreakpoints({4, 2, 4});
+    EXPECT_EQ(editor.view->breakpoints(), (Lines{2, 4}));
+    EXPECT_EQ(editor.listener.told.size(), told);
+}
+
+TEST(EditorPlugin, BreakpointsAndTheExecutionLineAreShown)
+{
+    BreakpointEditor editor;
+    editor.view->setBreakpointMargin(true);
+    QCoreApplication::processEvents();
+    const QImage plain = editor.textImage();
+    editor.view->setBreakpoints({1});
+    const QImage withBreakpoint = editor.textImage();
+    EXPECT_NE(withBreakpoint, plain);
+    editor.view->setExecutionLine(1);
+    EXPECT_EQ(editor.view->executionLine(), 1);
+    const QImage stopped = editor.textImage();
+    EXPECT_NE(stopped, withBreakpoint);
+    // The execution line shows over a breakpoint's.
+    editor.view->setExecutionLine(-1);
+    EXPECT_EQ(editor.textImage(), withBreakpoint);
+}
+
+// Lines stay on their code through edits, the listener hearing of it.
+TEST(EditorPlugin, BreakpointsFollowTheirCode)
+{
+    BreakpointEditor editor;
+    spp::EditorView* view = editor.view;
+    auto textAt = [view](int line) { return view->text().split(QLatin1Char('\n')).value(line); };
+    view->setBreakpoints({2, 4});
+
+    // Enter above them moves both; the listener hears once.
+    view->setCursorPosition({0, 0});
+    editor.press(Qt::Key_Return);
+    EXPECT_EQ(view->breakpoints(), (Lines{3, 5}));
+    EXPECT_EQ(editor.listener.told.size(), 1);
+    EXPECT_EQ(textAt(3), QStringLiteral("two"));
+    // Enter at the start of its line: it goes with the code.
+    view->setCursorPosition({3, 0});
+    editor.press(Qt::Key_Return);
+    EXPECT_EQ(view->breakpoints(), (Lines{4, 6}));
+    EXPECT_EQ(textAt(4), QStringLiteral("two"));
+    // Enter at its end: it stays.
+    view->setCursorPosition({4, 3});
+    editor.press(Qt::Key_Return);
+    EXPECT_EQ(view->breakpoints(), (Lines{4, 7}));
+    // Backspace joining its line to the one before: it goes along.
+    view->setCursorPosition({5, 0});
+    editor.press(Qt::Key_Backspace);
+    EXPECT_EQ(view->breakpoints(), (Lines{4, 6}));
+    view->setCursorPosition({4, 0});
+    editor.press(Qt::Key_Backspace);
+    EXPECT_EQ(view->breakpoints(), (Lines{3, 5}));
+    EXPECT_EQ(textAt(3), QStringLiteral("two"));
+    // Below them nothing moves and nothing is told.
+    const qsizetype told = editor.listener.told.size();
+    view->setCursorPosition({6, 0});
+    editor.press(Qt::Key_Return);
+    EXPECT_EQ(editor.listener.told.size(), told);
+    // Removed with its line it is gone; the last removed line's code stays.
+    view->setBreakpoints({1, 3, 5});
+    ASSERT_TRUE(view->replace({{{{2, 0}, {4, 0}}, QString()}}, QStringLiteral("cut")));
+    EXPECT_EQ(view->breakpoints(), (Lines{1, 3}));
+
+    view->setBreakpoints({});
+    view->setExecutionLine(2);
+    view->setCursorPosition({0, 0});
+    editor.press(Qt::Key_Return);
+    EXPECT_EQ(view->executionLine(), 3);
+}
+
+TEST(EditorPlugin, BreakpointsAndFiles)
+{
+    BreakpointEditor editor;
+    spp::EditorView* view = editor.view;
+    const QString path = write(editor.dir, "file.txt", "a\nb\nc\nd\n");
+    view->setBreakpoints({1});
+    view->setExecutionLine(1);
+    ASSERT_EQ(view->open(path), spp::EditorResult::Ok);
+    EXPECT_TRUE(view->breakpoints().isEmpty());
+    EXPECT_EQ(view->executionLine(), -1);
+
+    // A reload changes only the lines that differ: they follow.
+    view->setBreakpoints({2});
+    write(editor.dir, "file.txt", "new\na\nb\nc\nd\n");
+    ASSERT_EQ(view->reload(), spp::EditorResult::Ok);
+    EXPECT_EQ(view->breakpoints(), Lines{3});
+    // Another encoding is the same text.
+    ASSERT_EQ(view->reopen(QStringLiteral("utf8")), spp::EditorResult::Ok);
+    EXPECT_EQ(view->breakpoints(), Lines{3});
+}
+
 TEST(EditorPlugin, ReportsFailures)
 {
     QTemporaryDir dir;

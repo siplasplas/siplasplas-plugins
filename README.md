@@ -99,6 +99,14 @@ in `spp-editor/cpg`.
 The view also selects and gives its selection, highlights ranges (e.g. a
 search's matches; an edit removes them) and replaces ranges as one undo step.
 
+For a program with a debugger, `setBreakpointMargin()` adds a column beside
+the line numbers, hidden by default. A click there toggles a breakpoint on the
+line: a red dot, the line pale red. The listener hears of the lines
+(`breakpointsChanged()`), also when an edit moves them with their code;
+`setBreakpoints()` sets them. `setExecutionLine()` shows where the debugger
+stopped, with an arrow and a blue line. Removing a line removes its breakpoint,
+and opening a file removes them all.
+
 ### The find bar plugin
 
 `FindPlugin::createFindBar()` gives a bar for the program to put into its

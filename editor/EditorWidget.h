@@ -6,6 +6,7 @@
 
 #include <QWidget>
 
+#include <functional>
 #include <memory>
 
 namespace qce {
@@ -18,6 +19,8 @@ namespace kate { class EditorSyntax; }
 }
 
 namespace spp {
+
+class BreakpointGutter;
 
 // The editor of the plugin: qcodeedit's CodeEdit with line numbers and
 // folding, the file read and saved by qce::encoding::TextFile and coloured by
@@ -58,6 +61,12 @@ public:
     void setSelection(TextRange range) override;
     void setHighlights(const QList<TextRange>& ranges) override;
     bool replace(const QList<TextReplacement>& replacements, const QString& undoText) override;
+    void setBreakpointMargin(bool shown) override;
+    bool hasBreakpointMargin() const override;
+    void setBreakpoints(const QList<int>& lines) override;
+    QList<int> breakpoints() const override;
+    void setExecutionLine(int line) override;
+    int executionLine() const override;
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
 
@@ -73,11 +82,20 @@ private:
     void showLink(const QPoint& viewportPoint, bool ctrl);
     void displayLink();
     void hideLink();
+    // The breakpoints' and the execution line's column and backgrounds again.
+    void repaintBreakpoints();
+    void toggleBreakpoint(int line);
+    // Keeps breakpoints and the execution line on their code through an edit.
+    void linesInserted(int start, int count);
+    void linesRemoved(int start, int count);
+    // Each line through `moved`: its new line, or -1 for one that is gone.
+    void moveLines(const std::function<int(int)>& moved);
 
     qce::SimpleTextDocument* m_document = nullptr;
     qce::CodeEdit* m_edit = nullptr;
     qce::encoding::TextFile* m_file = nullptr;
     std::unique_ptr<qce::LineNumberGutter> m_lineNumbers;
+    std::unique_ptr<BreakpointGutter> m_breakpoints;
     std::unique_ptr<qce::FoldingGutter> m_foldGutter;
     // Goes before m_edit, which it detaches from.
     std::unique_ptr<qce::kate::EditorSyntax> m_syntax;

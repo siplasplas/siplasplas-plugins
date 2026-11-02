@@ -83,6 +83,10 @@ public:
     // Ctrl+click on a word shown as a link: the cursor is at `position` now,
     // e.g. for Go to Definition.
     virtual void linkActivated(TextPosition position) { (void)position; }
+    // The breakpoints are these lines now, in ascending order: a click in
+    // their margin, or an edit that moved them with their code. Not called
+    // for EditorView::setBreakpoints().
+    virtual void breakpointsChanged(const QList<int>& lines) { (void)lines; }
 };
 
 // One editor: a widget with a document and the file behind it.
@@ -160,6 +164,22 @@ public:
     // left, or after an edit, is let go.
     virtual void answerLink(TextPosition position, bool isLink) = 0;
 
+    // A column beside the line numbers for a program with a debugger, hidden
+    // by default: a click toggles a breakpoint on the line. While it is
+    // hidden neither breakpoints nor the execution line are drawn.
+    virtual void setBreakpointMargin(bool shown) = 0;
+    virtual bool hasBreakpointMargin() const = 0;
+    // Breakpoints on these lines (from 0): a red dot and a pale red line;
+    // replaces those set before. They stay on their code through edits and
+    // reloads, and opening a file removes them.
+    virtual void setBreakpoints(const QList<int>& lines) = 0;
+    virtual QList<int> breakpoints() const = 0;
+    // The line where the debugger stopped, -1 for none: an arrow and a blue
+    // line. It does not scroll there: setCursorPosition() does. It stays on
+    // its code through edits, and opening a file removes it.
+    virtual void setExecutionLine(int line) = 0;
+    virtual int executionLine() const = 0;
+
     // The listener is not owned and must outlive the view or be removed
     // (nullptr); one listener at a time.
     virtual void setListener(EditorViewListener* listener) = 0;
@@ -179,7 +199,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/5"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/6"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

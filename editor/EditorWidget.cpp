@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 #include "EditorWidget.h"
 
+#include "BreakpointGutter.h"
+
 #include <qce/CodeEdit.h>
 #include <qce/CodeEditArea.h>
+#include <qce/LeftRail.h>
 #include <qce/SimpleTextDocument.h>
 #include <qce/diff/LineDiff.h>
 #include <qce/encoding/TextFile.h>
@@ -54,7 +57,16 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
     m_lineNumbers = std::make_unique<qce::LineNumberGutter>(m_document);
     m_lineNumbers->setFont(m_edit->area()->font());
     m_edit->addLeftMargin(m_lineNumbers.get());
-    m_foldGutter = std::make_unique<qce::FoldingGutter>(
+    m_breakpoints = std::make_unique<BreakpointGutter>([this](int line) { toggleBreakpoint(line); });
+    m_edit->addLeftMargin(m_breakpoints.get());
+    m_edit->area()->setLineBackgroundProvider([this](int line) -> QColor {
+        if (!m_breakpoints->isShown()) return {};
+        if (line == m_breakpoints->executionLine()) return QColor(60, 130, 240, 80);
+        return m_breakpoints->hasLine(line) ? QColor(219, 58, 58, 45) : QColor();
+    });
+    connect(m_document, &qce::ITextDocument::linesInserted, this, &EditorWidget::linesInserted);
+    connect(m_document, &qce::ITextDocument::linesRemoved, this, &EditorWidget::linesRemoved);
+    m_foldGutter =std::make_unique<qce::FoldingGutter>(
         &m_edit->area()->foldState(), [this](int line) { m_edit->area()->toggleFoldAt(line); });
     m_edit->addLeftMargin(m_foldGutter.get());
 
@@ -102,6 +114,7 @@ EditorWidget::~EditorWidget()
 {
     disconnect(m_file, nullptr, this, nullptr);
     disconnect(m_edit->area(), nullptr, this, nullptr);
+    disconnect(m_document, nullptr, this, nullptr);
     m_edit->area()->viewport()->removeEventFilter(this);
     m_edit->area()->removeEventFilter(this);
     m_syntax.reset();
@@ -115,7 +128,14 @@ void EditorWidget::applySyntax()
 
 EditorResult EditorWidget::open(const QString& path, const QString& encoding)
 {
-    return toResult(m_file->open(path, encoding));
+    const EditorResult result = toResult(m_file->open(path, encoding));
+    if (result == EditorResult::Ok) {
+        // They were on the lines of the text before.
+        m_breakpoints->setLines({});
+        m_breakpoints->setExecutionLine(-1);
+        repaintBreakpoints();
+    }
+    return result;
 }
 
 EditorResult EditorWidget::reopen(const QString& encoding)
@@ -272,6 +292,99 @@ void EditorWidget::setMarks(const QList<TextMark>& marks)
         selections << selection;
     }
     m_edit->area()->setExtraSelections(MarksLayer, selections);
+}
+
+void EditorWidget::setBreakpointMargin(bool shown)
+{
+    m_breakpoints->setShown(shown);
+    m_edit->findChild<qce::LeftRail*>()->updateGeometry();
+    repaintBreakpoints();
+}
+
+bool EditorWidget::hasBreakpointMargin() const
+{
+    return m_breakpoints->isShown();
+}
+
+void EditorWidget::setBreakpoints(const QList<int>& lines)
+{
+    QList<int> sorted = lines;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    m_breakpoints->setLines(sorted);
+    repaintBreakpoints();
+}
+
+QList<int> EditorWidget::breakpoints() const
+{
+    return m_breakpoints->lines();
+}
+
+void EditorWidget::setExecutionLine(int line)
+{
+    m_breakpoints->setExecutionLine(line);
+    repaintBreakpoints();
+}
+
+int EditorWidget::executionLine() const
+{
+    return m_breakpoints->executionLine();
+}
+
+void EditorWidget::repaintBreakpoints()
+{
+    m_edit->findChild<qce::LeftRail*>()->update();
+    m_edit->area()->viewport()->update();
+}
+
+void EditorWidget::toggleBreakpoint(int line)
+{
+    QList<int> lines = m_breakpoints->lines();
+    const auto at = std::lower_bound(lines.begin(), lines.end(), line);
+    if (at != lines.end() && *at == line)
+        lines.erase(at);
+    else
+        lines.insert(at, line);
+    m_breakpoints->setLines(lines);
+    repaintBreakpoints();
+    if (m_listener) m_listener->breakpointsChanged(lines);
+}
+
+void EditorWidget::linesInserted(int start, int count)
+{
+    // The document says only which lines came after the split one. Left with
+    // nothing but spaces, it gave its code away to the last of them (Enter
+    // at the start of a line).
+    const int split = start - 1;
+    const bool codeLeft = split >= 0 && m_document->lineAt(split).trimmed().isEmpty();
+    moveLines([=](int line) { return line >= start || (line == split && codeLeft) ? line + count : line; });
+}
+
+void EditorWidget::linesRemoved(int start, int count)
+{
+    // What followed the removed text on their last line joined the line
+    // before them (Backspace at the start of a line, a deleted line).
+    const int last = start + count - 1;
+    moveLines([=](int line) {
+        if (line < start) return line;
+        if (line > last) return line - count;
+        return line == last ? start - 1 : -1;
+    });
+}
+
+void EditorWidget::moveLines(const std::function<int(int)>& moved)
+{
+    const QList<int> before = m_breakpoints->lines();
+    QList<int> lines;
+    lines.reserve(before.size());
+    for (int line : before) {
+        const int now = moved(line);
+        if (now >= 0 && (lines.isEmpty() || lines.last() != now)) lines << now;
+    }
+    if (m_breakpoints->executionLine() >= 0) m_breakpoints->setExecutionLine(moved(m_breakpoints->executionLine()));
+    if (lines == before) return;
+    m_breakpoints->setLines(lines);
+    if (m_listener) m_listener->breakpointsChanged(lines);
 }
 
 bool EditorWidget::linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const

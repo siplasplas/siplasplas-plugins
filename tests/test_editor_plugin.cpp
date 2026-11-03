@@ -18,6 +18,7 @@
 #include <QMouseEvent>
 #include <QPluginLoader>
 #include <QTemporaryDir>
+#include <QTreeWidget>
 #include <QWidget>
 
 #include <memory>
@@ -475,6 +476,165 @@ TEST(EditorPlugin, BreakpointsAndFiles)
     // Another encoding is the same text.
     ASSERT_EQ(view->reopen(QStringLiteral("utf8")), spp::EditorResult::Ok);
     EXPECT_EQ(view->breakpoints(), Lines{3});
+}
+
+namespace {
+
+struct CompletionListener : spp::EditorViewListener {
+    QList<spp::TextPosition> needed;
+    void completionsNeeded(spp::TextPosition position) override { needed << position; }
+};
+
+// An editor shown with a file, the cursor at the place.
+struct CompletionEditor {
+    QTemporaryDir dir;
+    spp::EditorView* view = plugin()->createEditor();
+    std::unique_ptr<QWidget> owner = editorWidget(view);
+    CompletionListener listener;
+    QTreeWidget* list = view->widget()->findChild<QTreeWidget*>();
+
+    CompletionEditor(const QByteArray& text, spp::TextPosition cursor)
+    {
+        view->widget()->resize(700, 400);
+        view->widget()->show();
+        view->open(write(dir, "code.cpp", text));
+        view->setCursorPosition(cursor);
+        view->setListener(&listener);
+    }
+    ~CompletionEditor() { view->setListener(nullptr); }
+
+    QStringList shown() const
+    {
+        QStringList labels;
+        for (int i = 0; i < list->topLevelItemCount(); ++i) labels << list->topLevelItem(i)->text(0);
+        return labels;
+    }
+    bool listShown() const { return list->isVisible(); }
+};
+
+const QList<spp::CompletionItem> someCompletions{{QStringLiteral("alpha(int a)"), QStringLiteral("void"), QStringLiteral("alpha"), QStringLiteral("alpha"), {}},
+                                                 {QStringLiteral("alphabet"), QStringLiteral("int"), {}, {}, {}},
+                                                 {QStringLiteral("beta"), QStringLiteral("double"), {}, {}, {}},
+                                                 {QStringLiteral("nsAlpha"), {}, {}, {}, {}}};
+
+} // namespace
+
+// Typing narrows the list, those starting with the word first; Enter writes
+// the choice as one undo step.
+TEST(EditorPlugin, CompletionsNarrowDownAndWriteTheChoice)
+{
+    CompletionEditor editor("int x = al;\nsecond\n", {0, 10});
+    ASSERT_NE(editor.list, nullptr);
+    spp::EditorView* view = editor.view;
+    view->showCompletions(someCompletions, {0, 8});
+    EXPECT_TRUE(view->isCompleting());
+    EXPECT_TRUE(editor.listShown());
+    EXPECT_EQ(editor.shown(), QStringList({QStringLiteral("alpha(int a)"), QStringLiteral("alphabet"), QStringLiteral("nsAlpha")}));
+    type(view, Qt::Key_P, QStringLiteral("p"));
+    type(view, Qt::Key_H, QStringLiteral("h"));
+    type(view, Qt::Key_A, QStringLiteral("a"));
+    type(view, Qt::Key_B, QStringLiteral("b"));
+    EXPECT_EQ(editor.shown(), QStringList{QStringLiteral("alphabet")});
+    type(view, Qt::Key_Backspace);
+    EXPECT_EQ(editor.shown().size(), 3);
+    type(view, Qt::Key_Down);
+    type(view, Qt::Key_Return, QStringLiteral("\r"));
+    EXPECT_FALSE(view->isCompleting());
+    EXPECT_FALSE(editor.listShown());
+    EXPECT_EQ(view->text(), QStringLiteral("int x = alphabet;\nsecond"));
+    EXPECT_EQ(view->cursorPosition().column, 16);
+    type(view, Qt::Key_Z, {}, Qt::ControlModifier);
+    EXPECT_EQ(view->text(), QStringLiteral("int x = alpha;\nsecond"));
+}
+
+TEST(EditorPlugin, CompletionsCloseWhenNotWanted)
+{
+    CompletionEditor editor("ab\nsecond\n", {0, 2});
+    spp::EditorView* view = editor.view;
+    // Escape leaves the text as it is.
+    view->showCompletions(someCompletions, {0, 0});
+    EXPECT_TRUE(editor.listShown());
+    type(view, Qt::Key_Escape);
+    EXPECT_FALSE(view->isCompleting());
+    EXPECT_EQ(view->text(), QStringLiteral("ab\nsecond"));
+    // Within the word it goes on; leaving the word closes it.
+    view->showCompletions(someCompletions, {0, 0});
+    type(view, Qt::Key_Left);
+    EXPECT_TRUE(view->isCompleting());
+    view->setCursorPosition({1, 0});
+    EXPECT_FALSE(view->isCompleting());
+    // An answer for a word the cursor left is let go.
+    view->showCompletions(someCompletions, {0, 0});
+    EXPECT_FALSE(view->isCompleting());
+    // A character that ends the word closes it.
+    view->setCursorPosition({0, 2});
+    view->showCompletions(someCompletions, {0, 0});
+    EXPECT_TRUE(view->isCompleting());
+    type(view, Qt::Key_ParenLeft, QStringLiteral("("));
+    EXPECT_FALSE(view->isCompleting());
+    // None fits, or no writing here.
+    view->setCursorPosition({1, 6});
+    view->showCompletions(someCompletions, {1, 0});
+    EXPECT_FALSE(view->isCompleting());
+    view->setReadOnly(true);
+    view->setCursorPosition({0, 0});
+    view->showCompletions(someCompletions, {0, 0});
+    EXPECT_FALSE(view->isCompleting());
+}
+
+TEST(EditorPlugin, CompletionsAreChosenWithTabOrAClick)
+{
+    CompletionEditor editor("a\n", {0, 1});
+    spp::EditorView* view = editor.view;
+    view->showCompletions(someCompletions, {0, 0});
+    type(view, Qt::Key_Tab);
+    EXPECT_EQ(view->text(), QStringLiteral("alpha"));
+
+    view->setCursorPosition({0, 5});
+    view->showCompletions(someCompletions, {0, 0});
+    ASSERT_TRUE(editor.listShown());
+    QWidget* rows = editor.list->viewport();
+    const QPoint second = editor.list->visualItemRect(editor.list->topLevelItem(1)).center();
+    QMouseEvent press(QEvent::MouseButtonPress, second, rows->mapToGlobal(second), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(rows, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, second, rows->mapToGlobal(second), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(rows, &release);
+    EXPECT_FALSE(view->isCompleting());
+    EXPECT_EQ(view->text(), QStringLiteral("alphabet"));
+}
+
+// What it brings elsewhere goes with it, in one undo step; the cursor stays
+// after the word, though lines were added above it.
+TEST(EditorPlugin, CompletionsBringTheirEdits)
+{
+    CompletionEditor editor("line\nfoo\n", {1, 3});
+    spp::EditorView* view = editor.view;
+    const QList<spp::CompletionItem> withInclude{
+        {QStringLiteral("food"), {}, {}, {}, {{{{0, 0}, {0, 0}}, QStringLiteral("#include <a>\n#include <b>\n")}}}};
+    view->showCompletions(withInclude, {1, 0});
+    type(view, Qt::Key_Return, QStringLiteral("\r"));
+    EXPECT_EQ(view->text(), QStringLiteral("#include <a>\n#include <b>\nline\nfood"));
+    EXPECT_EQ(view->cursorPosition().line, 3);
+    EXPECT_EQ(view->cursorPosition().column, 4);
+    type(view, Qt::Key_Z, {}, Qt::ControlModifier);
+    EXPECT_EQ(view->text(), QStringLiteral("line\nfoo"));
+}
+
+// The program knows more: it is asked as the word grows, even with none left to show.
+TEST(EditorPlugin, IncompleteCompletionsAskForMore)
+{
+    CompletionEditor editor("a\n", {0, 1});
+    spp::EditorView* view = editor.view;
+    view->showCompletions({{QStringLiteral("alpha"), {}, {}, {}, {}}}, {0, 0}, true);
+    EXPECT_TRUE(editor.listener.needed.isEmpty());
+    type(view, Qt::Key_Q, QStringLiteral("q"));
+    EXPECT_EQ(editor.listener.needed.size(), 1);
+    EXPECT_TRUE(view->isCompleting());
+    EXPECT_FALSE(editor.listShown());
+    view->showCompletions({{QStringLiteral("aq"), {}, {}, {}, {}}}, {0, 0}, true);
+    EXPECT_TRUE(editor.listShown());
+    view->hideCompletions();
+    EXPECT_FALSE(view->isCompleting());
 }
 
 TEST(EditorPlugin, ReportsFailures)

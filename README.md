@@ -115,6 +115,11 @@ as one undo step, together with any edits it brings elsewhere (an `#include`);
 Escape, a click in the text or leaving the word closes it. With `incomplete`,
 the listener hears as the word grows (`completionsNeeded()`), to give more.
 
+When the mouse rests on a word, the listener is asked about it
+(`hoverQueried()`); its answer in Markdown (`answerHover()`, at once or later)
+shows under the mouse, after the messages of the marks there, until the mouse
+moves away.
+
 ### The find bar plugin
 
 `FindPlugin::createFindBar()` gives a bar for the program to put into its

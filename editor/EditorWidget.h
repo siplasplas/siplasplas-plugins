@@ -71,6 +71,7 @@ public:
     void showCompletions(const QList<CompletionItem>& items, TextPosition start, bool incomplete) override;
     void hideCompletions() override;
     bool isCompleting() const override { return m_completing; }
+    void answerHover(TextPosition position, const QString& markdown) override;
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
 
@@ -103,6 +104,11 @@ private:
     void acceptCompletion();
     // The list's keys; true when it took the key.
     bool completionKey(int key);
+    // The mouse rests at `point` of the viewport: the marks' messages there
+    // now, and the listener asked about the word.
+    void showHover(const QPoint& point, const QPoint& globalPoint);
+    // Tooltip shown under the mouse until it moves away from there.
+    void showHoverText(const QString& html);
 
     qce::SimpleTextDocument* m_document = nullptr;
     qce::CodeEdit* m_edit = nullptr;
@@ -125,6 +131,15 @@ private:
         TextPosition end;
     } m_query;
     bool m_querying = false;  // in the listener's linkQueried()
+    // The word the mouse rests on, asked about, and what shows of it.
+    struct Hover {
+        bool asked = false;
+        TextPosition start;
+        TextPosition end;
+        QPoint point;
+        QPoint globalPoint;
+        QStringList messages;  // of the marks there, as HTML
+    } m_hover;
     CompletionPopup* m_completionPopup = nullptr;
     QList<CompletionItem> m_completions;
     TextPosition m_completionStart;

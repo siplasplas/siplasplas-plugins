@@ -20,6 +20,7 @@
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QTextDocument>
 #include <QToolTip>
 #include <QVBoxLayout>
 
@@ -103,6 +104,7 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
         m_marks.clear();
         m_linkShown = false;
         m_query = {};  // an answer was for the text before
+        m_hover = {};
         if (m_listener) m_listener->textChanged();
     });
     // The messages of the marks under the mouse, and the word under it as a
@@ -507,6 +509,61 @@ bool EditorWidget::completionKey(int key)
     }
 }
 
+void EditorWidget::showHover(const QPoint& point, const QPoint& globalPoint)
+{
+    const qce::TextCursor at = m_edit->area()->cursorAt(point);
+    auto before = [](int line, int column, const TextPosition& position) {
+        return line < position.line || (line == position.line && column < position.column);
+    };
+    m_hover = {};
+    m_hover.point = point;
+    m_hover.globalPoint = globalPoint;
+    for (const TextMark& mark : m_marks) {
+        const TextPosition end = (mark.end.line > mark.start.line
+                                  || (mark.end.line == mark.start.line && mark.end.column > mark.start.column))
+                                     ? mark.end
+                                     : TextPosition{mark.start.line, mark.start.column + 1};
+        if (!before(at.line, at.column, mark.start) && before(at.line, at.column, end))
+            m_hover.messages << mark.message.toHtmlEscaped();
+    }
+    if (m_hover.messages.isEmpty())
+        QToolTip::hideText();
+    else
+        showHoverText(m_hover.messages.join(QStringLiteral("<hr>")));
+    // The word: a description may come now or later.
+    TextPosition start;
+    TextPosition end;
+    if (!linkAt(point, &start, &end)) return;
+    m_hover.asked = true;
+    m_hover.start = start;
+    m_hover.end = end;
+    const int column = std::clamp(at.column, start.column, end.column - 1);
+    if (m_listener) m_listener->hoverQueried({at.line, column});
+}
+
+void EditorWidget::answerHover(TextPosition position, const QString& markdown)
+{
+    // For the word still under the mouse only.
+    if (!m_hover.asked || markdown.trimmed().isEmpty() || position.line != m_hover.start.line
+        || position.column < m_hover.start.column || position.column >= m_hover.end.column)
+        return;
+    QTextDocument document;
+    document.setMarkdown(markdown);
+    // Only its body: it goes after the marks' messages in one tooltip.
+    const QString html = document.toHtml();
+    const qsizetype body = html.indexOf(QLatin1Char('>'), html.indexOf(QLatin1String("<body"))) + 1;
+    QStringList parts = m_hover.messages;
+    parts << html.mid(body, html.lastIndexOf(QLatin1String("</body>")) - body);
+    showHoverText(parts.join(QStringLiteral("<hr>")));
+}
+
+void EditorWidget::showHoverText(const QString& html)
+{
+    // Gone when the mouse goes on, as a description belongs to one word.
+    QWidget* viewport = m_edit->area()->viewport();
+    QToolTip::showText(m_hover.globalPoint, html, viewport, QRect(m_hover.point - QPoint(12, 12), QSize(24, 24)));
+}
+
 bool EditorWidget::linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const
 {
     using qce::words::isWordCharAt;
@@ -599,6 +656,14 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
             const auto* mouse = static_cast<QMouseEvent*>(event);
             if (mouse->buttons() == Qt::NoButton)
                 showLink(mouse->position().toPoint(), mouse->modifiers() & Qt::ControlModifier);
+            // A description on its way is of the word the mouse rested on.
+            if (m_hover.asked) {
+                TextPosition start;
+                TextPosition end;
+                if (!linkAt(mouse->position().toPoint(), &start, &end) || start.line != m_hover.start.line
+                    || start.column != m_hover.start.column)
+                    m_hover = {};
+            }
             break;
         }
         case QEvent::MouseButtonPress: {
@@ -623,6 +688,7 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
         case QEvent::Leave:
             hideLink();
             m_query = {};
+            m_hover = {};
             break;
         default: break;
         }
@@ -641,25 +707,8 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
     }
     if (watched == viewport && event->type() == QEvent::ToolTip) {
         const auto* help = static_cast<QHelpEvent*>(event);
-        const qce::TextCursor at = m_edit->area()->cursorAt(help->pos());
-        auto before = [](int line, int column, const TextPosition& position) {
-            return line < position.line || (line == position.line && column < position.column);
-        };
-        QStringList messages;
-        for (const TextMark& mark : m_marks) {
-            const TextPosition end = (mark.end.line > mark.start.line
-                                      || (mark.end.line == mark.start.line && mark.end.column > mark.start.column))
-                                         ? mark.end
-                                         : TextPosition{mark.start.line, mark.start.column + 1};
-            if (!before(at.line, at.column, mark.start) && before(at.line, at.column, end))
-                messages << mark.message.toHtmlEscaped();
-        }
-        if (messages.isEmpty()) {
-            QToolTip::hideText();
-            event->ignore();
-        } else {
-            QToolTip::showText(help->globalPos(), messages.join(QStringLiteral("<hr>")), m_edit->area()->viewport());
-        }
+        showHover(help->pos(), help->globalPos());
+        if (m_hover.messages.isEmpty()) event->ignore();
         return true;
     }
     return QWidget::eventFilter(watched, event);

@@ -101,6 +101,10 @@ public:
     // The word typed further, with completions shown as incomplete: more of
     // them may fit it now, for showCompletions() again.
     virtual void completionsNeeded(TextPosition position) { (void)position; }
+    // The mouse rests on the word at `position`: is there something to say
+    // of it (e.g. a language server's description)? Answered by
+    // EditorView::answerHover(), now or later; unanswered, nothing is shown.
+    virtual void hoverQueried(TextPosition position) { (void)position; }
 };
 
 // One editor: a widget with a document and the file behind it.
@@ -204,6 +208,11 @@ public:
     virtual void hideCompletions() = 0;
     virtual bool isCompleting() const = 0;
 
+    // The answer to EditorViewListener::hoverQueried(position): Markdown shown
+    // under the mouse, after the messages of the marks there. Empty, or for a
+    // word the mouse has left, or after an edit, it is let go.
+    virtual void answerHover(TextPosition position, const QString& markdown) = 0;
+
     // The listener is not owned and must outlive the view or be removed
     // (nullptr); one listener at a time.
     virtual void setListener(EditorViewListener* listener) = 0;
@@ -223,7 +232,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/7"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/8"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

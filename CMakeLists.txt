@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(siplasplas-plugins VERSION 0.11.0 LANGUAGES CXX)
+project(siplasplas-plugins VERSION 0.12.0 LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 17)

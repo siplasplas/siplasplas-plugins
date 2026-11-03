@@ -27,7 +27,8 @@ FetchContent_Declare(qcodeedit
 FetchContent_MakeAvailable(qcodeedit)
 
 spp_add_plugin(spp-editor EditorPluginImpl.cpp EditorWidget.cpp EditorWidget.h
-    BreakpointGutter.cpp BreakpointGutter.h)
+    BreakpointGutter.cpp BreakpointGutter.h
+    CompletionPopup.cpp CompletionPopup.h)
 target_link_libraries(spp-editor PRIVATE
     Qt6::Widgets
     qcodeedit::qcodeedit

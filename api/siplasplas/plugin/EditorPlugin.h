@@ -54,6 +54,17 @@ struct TextMark {
     QString message;
 };
 
+// What can be written at the cursor, e.g. from a language server.
+struct CompletionItem {
+    QString label;       // shown
+    QString detail;      // shown beside it, e.g. a type
+    QString filterText;  // what typing is matched with; empty: the label
+    QString insertText;  // written instead of the word; empty: the label
+    // Elsewhere in the text, e.g. the #include it needs: not overlapping the
+    // word nor each other.
+    QList<TextReplacement> additionalEdits;
+};
+
 // Result of reading or saving a file.
 enum class EditorResult {
     Ok,
@@ -87,6 +98,9 @@ public:
     // their margin, or an edit that moved them with their code. Not called
     // for EditorView::setBreakpoints().
     virtual void breakpointsChanged(const QList<int>& lines) { (void)lines; }
+    // The word typed further, with completions shown as incomplete: more of
+    // them may fit it now, for showCompletions() again.
+    virtual void completionsNeeded(TextPosition position) { (void)position; }
 };
 
 // One editor: a widget with a document and the file behind it.
@@ -180,6 +194,16 @@ public:
     virtual void setExecutionLine(int line) = 0;
     virtual int executionLine() const = 0;
 
+    // A list of completions at the cursor, for the word from `start` to the
+    // cursor; let go when the cursor left that word in the meantime or the
+    // view is read-only. Typing narrows the list down, leaving the word closes
+    // it. Up, Down, Page Up and Page Down choose; Enter, Tab or a click write
+    // the choice as one undo step; Escape closes it. `incomplete`: the program
+    // knows more than these, and completionsNeeded() asks as the word grows.
+    virtual void showCompletions(const QList<CompletionItem>& items, TextPosition start, bool incomplete = false) = 0;
+    virtual void hideCompletions() = 0;
+    virtual bool isCompleting() const = 0;
+
     // The listener is not owned and must outlive the view or be removed
     // (nullptr); one listener at a time.
     virtual void setListener(EditorViewListener* listener) = 0;
@@ -199,7 +223,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/6"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/7"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

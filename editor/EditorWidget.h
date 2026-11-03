@@ -21,6 +21,7 @@ namespace kate { class EditorSyntax; }
 namespace spp {
 
 class BreakpointGutter;
+class CompletionPopup;
 
 // The editor of the plugin: qcodeedit's CodeEdit with line numbers and
 // folding, the file read and saved by qce::encoding::TextFile and coloured by
@@ -67,6 +68,9 @@ public:
     QList<int> breakpoints() const override;
     void setExecutionLine(int line) override;
     int executionLine() const override;
+    void showCompletions(const QList<CompletionItem>& items, TextPosition start, bool incomplete) override;
+    void hideCompletions() override;
+    bool isCompleting() const override { return m_completing; }
 
     void setListener(EditorViewListener* listener) override { m_listener = listener; }
 
@@ -90,6 +94,15 @@ private:
     void linesRemoved(int start, int count);
     // Each line through `moved`: its new line, or -1 for one that is gone.
     void moveLines(const std::function<int(int)>& moved);
+    // What was typed of the word being completed; false when the cursor is
+    // not in it any more.
+    bool completionWord(QString* typed) const;
+    // The list for the word as it is now, or the end of completing.
+    void updateCompletions();
+    void placeCompletions();
+    void acceptCompletion();
+    // The list's keys; true when it took the key.
+    bool completionKey(int key);
 
     qce::SimpleTextDocument* m_document = nullptr;
     qce::CodeEdit* m_edit = nullptr;
@@ -112,6 +125,12 @@ private:
         TextPosition end;
     } m_query;
     bool m_querying = false;  // in the listener's linkQueried()
+    CompletionPopup* m_completionPopup = nullptr;
+    QList<CompletionItem> m_completions;
+    TextPosition m_completionStart;
+    QString m_completionTyped;
+    bool m_completionIncomplete = false;
+    bool m_completing = false;
 };
 
 } // namespace spp

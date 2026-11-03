@@ -107,6 +107,14 @@ line: a red dot, the line pale red. The listener hears of the lines
 stopped, with an arrow and a blue line. Removing a line removes its breakpoint,
 and opening a file removes them all.
 
+`showCompletions()` shows a list of completions under the word at the cursor,
+e.g. a language server's. Typing narrows it down: those starting with what was
+typed first, then those having its letters in order, without regard to case.
+Up, Down, Page Up and Page Down choose; Enter, Tab or a click write the choice
+as one undo step, together with any edits it brings elsewhere (an `#include`);
+Escape, a click in the text or leaving the word closes it. With `incomplete`,
+the listener hears as the word grows (`completionsNeeded()`), to give more.
+
 ### The find bar plugin
 
 `FindPlugin::createFindBar()` gives a bar for the program to put into its

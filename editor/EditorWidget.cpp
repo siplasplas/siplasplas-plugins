@@ -2,6 +2,7 @@
 #include "EditorWidget.h"
 
 #include "BreakpointGutter.h"
+#include "CompletionPopup.h"
 
 #include <qce/CodeEdit.h>
 #include <qce/CodeEditArea.h>
@@ -88,8 +89,14 @@ EditorWidget::EditorWidget(QWidget* parent) : QWidget(parent)
         if (m_listener) m_listener->formatChanged();
     });
     connect(m_edit->area(), &qce::CodeEditArea::cursorPositionChanged, this, [this](qce::TextCursor cursor) {
+        // Typing moves the cursor too: the word being completed is seen here.
+        if (m_completing) updateCompletions();
         if (m_listener) m_listener->cursorMoved({cursor.line, cursor.column});
     });
+    m_completionPopup = new CompletionPopup(m_edit);
+    m_completionPopup->setFont(m_edit->area()->font());
+    connect(m_completionPopup, &CompletionPopup::accepted, this, &EditorWidget::acceptCompletion);
+    connect(m_edit->area(), &qce::CodeEditArea::viewportChanged, this, [this] { placeCompletions(); });
     // The area clears its decorations on every change of the text; the
     // marks' messages go with them.
     connect(m_edit->area(), &qce::CodeEditArea::textChanged, this, [this] {
@@ -387,6 +394,119 @@ void EditorWidget::moveLines(const std::function<int(int)>& moved)
     if (m_listener) m_listener->breakpointsChanged(lines);
 }
 
+void EditorWidget::showCompletions(const QList<CompletionItem>& items, TextPosition start, bool incomplete)
+{
+    if (isReadOnly()) return;
+    m_completions = items;
+    m_completionStart = start;
+    m_completionIncomplete = incomplete;
+    m_completing = true;
+    if (!completionWord(&m_completionTyped)) {
+        hideCompletions();
+        return;
+    }
+    updateCompletions();
+}
+
+void EditorWidget::hideCompletions()
+{
+    m_completing = false;
+    m_completions.clear();
+    m_completionPopup->hide();
+}
+
+bool EditorWidget::completionWord(QString* typed) const
+{
+    const TextPosition cursor = cursorPosition();
+    if (cursor.line != m_completionStart.line || cursor.column < m_completionStart.column) return false;
+    const QString line = m_document->lineAt(cursor.line);
+    for (int column = m_completionStart.column; column < cursor.column; ++column)
+        if (!qce::words::isWordCharAt(line, column)) return false;
+    *typed = line.mid(m_completionStart.column, cursor.column - m_completionStart.column);
+    return true;
+}
+
+void EditorWidget::updateCompletions()
+{
+    QString typed;
+    if (!completionWord(&typed)) {
+        hideCompletions();
+        return;
+    }
+    const bool grew = typed != m_completionTyped;
+    m_completionTyped = typed;
+    const bool any = m_completionPopup->fill(m_completions, typed);
+    // Incomplete, more may come for this word though none fits now.
+    if (!any && !m_completionIncomplete) {
+        hideCompletions();
+        return;
+    }
+    m_completionPopup->setVisible(any);
+    if (any) {
+        m_completionPopup->raise();
+        placeCompletions();
+    }
+    if (grew && m_completionIncomplete && m_listener) m_listener->completionsNeeded(cursorPosition());
+}
+
+void EditorWidget::placeCompletions()
+{
+    if (!m_completionPopup->isVisible()) return;
+    qce::CodeEditArea* area = m_edit->area();
+    const QRect cursor = area->inputMethodQuery(Qt::ImCursorRectangle).toRect();
+    const QPoint top = area->mapTo(m_edit, cursor.topLeft());
+    const QPoint bottom = area->mapTo(m_edit, cursor.bottomLeft());
+    const QSize size = m_completionPopup->wantedSize().boundedTo(m_edit->size());
+    // Under the word's start, or over it when there is no room below.
+    int x = top.x() - m_completionTyped.size() * area->fontMetrics().horizontalAdvance(QLatin1Char('x'));
+    x = std::clamp(x, 0, std::max(0, m_edit->width() - size.width()));
+    const int y = bottom.y() + size.height() < m_edit->height() ? bottom.y() + 1 : std::max(0, top.y() - size.height());
+    m_completionPopup->setGeometry(x, y, size.width(), size.height());
+}
+
+void EditorWidget::acceptCompletion()
+{
+    const int chosen = m_completionPopup->chosen();
+    if (chosen < 0 || chosen >= m_completions.size()) return;
+    const CompletionItem item = m_completions.at(chosen);
+    const TextPosition start = m_completionStart;
+    const TextPosition end = cursorPosition();
+    hideCompletions();
+    const QString written = item.insertText.isEmpty() ? item.label : item.insertText;
+    QList<qce::CodeEditArea::TextReplacement> edits{{{start.line, start.column}, {end.line, end.column}, written}};
+    // The cursor goes after what was written: lines added or removed above
+    // it move that down or up.
+    int line = start.line + int(written.count(QLatin1Char('\n')));
+    for (const TextReplacement& edit : item.additionalEdits) {
+        edits.append({{edit.range.start.line, edit.range.start.column}, {edit.range.end.line, edit.range.end.column}, edit.text});
+        if (edit.range.start.line < start.line)
+            line += int(edit.text.count(QLatin1Char('\n'))) - (edit.range.end.line - edit.range.start.line);
+    }
+    std::sort(edits.begin(), edits.end(), [](const auto& a, const auto& b) {
+        return a.start.line != b.start.line ? a.start.line < b.start.line : a.start.column < b.start.column;
+    });
+    if (!m_edit->area()->replaceRanges(edits, tr("Complete"))) return;
+    const int lastBreak = int(written.lastIndexOf(QLatin1Char('\n')));
+    const int column = lastBreak < 0 ? start.column + int(written.size()) : int(written.size()) - lastBreak - 1;
+    m_edit->area()->setCursorPosition({line, column});
+}
+
+bool EditorWidget::completionKey(int key)
+{
+    if (!m_completionPopup->isVisible()) return false;
+    switch (key) {
+    case Qt::Key_Up: m_completionPopup->moveChoice(-1, true); return true;
+    case Qt::Key_Down: m_completionPopup->moveChoice(1, true); return true;
+    case Qt::Key_PageUp: m_completionPopup->moveChoice(-9, false); return true;
+    case Qt::Key_PageDown: m_completionPopup->moveChoice(9, false); return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Tab: acceptCompletion(); return true;
+    case Qt::Key_Escape: hideCompletions(); return true;
+    default: return false;
+    }
+}
+
 bool EditorWidget::linkAt(const QPoint& viewportPoint, TextPosition* start, TextPosition* end) const
 {
     using qce::words::isWordCharAt;
@@ -482,6 +602,7 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
             break;
         }
         case QEvent::MouseButtonPress: {
+            hideCompletions();
             const auto* mouse = static_cast<QMouseEvent*>(event);
             TextPosition start;
             TextPosition end;
@@ -509,12 +630,14 @@ bool EditorWidget::eventFilter(QObject* watched, QEvent* event)
                && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
         // Ctrl pressed or let go with the mouse resting over the text.
         const auto* key = static_cast<QKeyEvent*>(event);
+        if (event->type() == QEvent::KeyPress && completionKey(key->key())) return true;
         if (key->key() == Qt::Key_Control && viewport->underMouse())
             showLink(viewport->mapFromGlobal(QCursor::pos()), event->type() == QEvent::KeyPress);
         else if (event->type() == QEvent::KeyPress)
             hideLink();
     } else if (watched == m_edit->area() && event->type() == QEvent::FocusOut) {
         hideLink();
+        hideCompletions();
     }
     if (watched == viewport && event->type() == QEvent::ToolTip) {
         const auto* help = static_cast<QHelpEvent*>(event);

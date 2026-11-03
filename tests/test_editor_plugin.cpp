@@ -637,6 +637,87 @@ TEST(EditorPlugin, IncompleteCompletionsAskForMore)
     EXPECT_FALSE(view->isCompleting());
 }
 
+namespace {
+
+struct HoverListener : spp::EditorViewListener {
+    QList<spp::TextPosition> asked;
+    void hoverQueried(spp::TextPosition position) override { asked << position; }
+};
+
+} // namespace
+
+// The mouse rests on a word: the listener is asked, and its Markdown shows
+// after the marks' messages, unless the mouse left the word or the text changed.
+TEST(EditorPlugin, HoverShowsTheAnswerForTheWord)
+{
+    QTemporaryDir dir;
+    const QString path = write(dir, "hover.cpp", "alpha beta\n\nend\n");
+    spp::EditorView* view = plugin()->createEditor();
+    const auto owner = editorWidget(view);
+    view->widget()->resize(600, 300);
+    view->widget()->show();
+    ASSERT_EQ(view->open(path), spp::EditorResult::Ok);
+    HoverListener listener;
+    view->setListener(&listener);
+    auto* area = view->widget()->findChild<QAbstractScrollArea*>();
+    ASSERT_NE(area, nullptr);
+    QWidget* viewport = area->viewport();
+    const QPoint onAlpha(4, 4);
+    auto rest = [&](const QPoint& point) {
+        QHelpEvent event(QEvent::ToolTip, point, viewport->mapToGlobal(point));
+        QCoreApplication::sendEvent(viewport, &event);
+    };
+
+    rest(onAlpha);
+    ASSERT_EQ(listener.asked.size(), 1);
+    EXPECT_EQ(listener.asked.first().line, 0);
+    EXPECT_FALSE(QToolTip::isVisible());  // nothing to say yet
+    view->answerHover(listener.asked.first(), QStringLiteral("**about alpha**"));
+    EXPECT_TRUE(QToolTip::isVisible());
+    EXPECT_TRUE(QToolTip::text().contains(QStringLiteral("about alpha")));
+    EXPECT_FALSE(QToolTip::text().contains(QStringLiteral("**")));
+    EXPECT_FALSE(QToolTip::text().contains(QStringLiteral("<body")));
+    hideToolTip();
+
+    // Nothing to say, or for another word: nothing shows.
+    rest(onAlpha);
+    view->answerHover(listener.asked.last(), QString());
+    EXPECT_FALSE(QToolTip::isVisible());
+    view->answerHover({2, 0}, QStringLiteral("about end"));
+    EXPECT_FALSE(QToolTip::isVisible());
+
+    // An empty line has no word to ask about.
+    const qsizetype asked = listener.asked.size();
+    rest(QPoint(4, viewport->fontMetrics().height() * 3 / 2 + 4));
+    EXPECT_EQ(listener.asked.size(), asked);
+
+    // The mouse moved to another word before the answer came.
+    rest(onAlpha);
+    const spp::TextPosition question = listener.asked.last();
+    const QPoint onBeta(viewport->fontMetrics().horizontalAdvance(QStringLiteral("alpha be")), 4);
+    QMouseEvent move(QEvent::MouseMove, onBeta, viewport->mapToGlobal(onBeta), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(viewport, &move);
+    view->answerHover(question, QStringLiteral("late"));
+    EXPECT_FALSE(QToolTip::isVisible());
+
+    // After an edit the answer is for another text.
+    rest(onAlpha);
+    const spp::TextPosition before = listener.asked.last();
+    view->setCursorPosition({2, 0});
+    type(view, Qt::Key_X, QStringLiteral("x"));
+    view->answerHover(before, QStringLiteral("late"));
+    EXPECT_FALSE(QToolTip::isVisible());
+
+    // With a mark there, its message goes first.
+    view->setMarks({{{0, 0}, {0, 5}, spp::TextMark::Kind::Error, QStringLiteral("an error here")}});
+    rest(onAlpha);
+    EXPECT_TRUE(QToolTip::text().contains(QStringLiteral("an error here")));
+    view->answerHover(listener.asked.last(), QStringLiteral("about alpha"));
+    EXPECT_LT(QToolTip::text().indexOf(QStringLiteral("an error here")), QToolTip::text().indexOf(QStringLiteral("about alpha")));
+    hideToolTip();
+    view->setListener(nullptr);
+}
+
 TEST(EditorPlugin, ReportsFailures)
 {
     QTemporaryDir dir;

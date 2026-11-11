@@ -114,6 +114,69 @@ TEST(FindBar, StopsAtTheEndWithoutWrapping)
     EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
 }
 
+TEST(FindBar, SearchesInASelectionOfSeveralLines)
+{
+    Fixture f("x\nx a x\nx b x\nx\n");
+    f.view->setSelection({{1, 0}, {2, 5}});
+    f.bar.showReplace();
+    EXPECT_TRUE(f.option(QStringLiteral("▽"))->isChecked());
+    EXPECT_TRUE(f.bar.findChildren<QLineEdit*>().first()->text().isEmpty());  // not sought
+    f.seek(QStringLiteral("x"));
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    f.bar.findChildren<QLineEdit*>().at(1)->setText(QStringLiteral("y"));
+    for (auto* button : f.bar.findChildren<QPushButton*>())
+        if (button->text() == QStringLiteral("Replace All")) button->click();
+    EXPECT_EQ(f.view->text(), QStringLiteral("x\ny a y\ny b y\nx"));
+
+    // The selection follows an edit before it.
+    f.view->replace({spp::TextReplacement{{{0, 0}, {0, 0}}, QStringLiteral("x x\n")}}, QStringLiteral("Insert"));
+    f.seek(QStringLiteral("y"));
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    f.seek(QStringLiteral("x"));
+    EXPECT_EQ(f.count(), QStringLiteral("No matches"));
+    // Off: the whole text.
+    f.option(QStringLiteral("▽"))->setChecked(false);
+    EXPECT_TRUE(f.count().endsWith(QStringLiteral("of 4")));
+}
+
+TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
+{
+    {
+        Fixture f("alpha beta alpha\n");
+        f.view->setSelection({{0, 0}, {0, 5}});
+        f.bar.showFind();
+        EXPECT_FALSE(f.option(QStringLiteral("▽"))->isChecked());
+        EXPECT_EQ(f.count(), QStringLiteral("1 of 2"));
+    }
+    {
+        const QByteArray line = QByteArray(70, 'a') + " end a\n";
+        Fixture f(line);
+        f.view->setSelection({{0, 0}, {0, 70}});
+        f.bar.showFind();
+        EXPECT_TRUE(f.option(QStringLiteral("▽"))->isChecked());
+        f.seek(QStringLiteral("a"));
+        EXPECT_EQ(f.count(), QStringLiteral("1 of 70"));
+    }
+}
+
+TEST(FindBar, SearchInSelectionByHand)
+{
+    Fixture f("a a\na a\n");
+    f.bar.showFind();
+    f.seek(QStringLiteral("a"));
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    // Without a selection it stays off. (The match is selected now: clear it.)
+    f.view->setCursorPosition({1, 3});
+    QToolButton* scope = f.option(QStringLiteral("▽"));
+    scope->setChecked(true);
+    EXPECT_FALSE(scope->isChecked());
+    // With one, it searches in it.
+    f.view->setSelection({{1, 0}, {1, 3}});
+    scope->setChecked(true);
+    EXPECT_TRUE(scope->isChecked());
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 2"));
+}
+
 TEST(FindBar, Options)
 {
     Fixture f("Two two twofold\n");

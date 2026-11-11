@@ -88,6 +88,9 @@ public:
     virtual void setSelection(TextRange range) { (void)range; }
     // Highlights the matches, replacing those set before.
     virtual void setHighlights(const QList<TextRange>& ranges) { (void)ranges; }
+    // Shades the part searched in ("search in selection"), beneath the
+    // matches, replacing what was shaded before; empty: none.
+    virtual void setScopeHighlights(const QList<TextRange>& ranges) { (void)ranges; }
     // Replaces the ranges (in the order of the text, not overlapping) as one
     // undo step named `undoText`; false, doing nothing, when it cannot.
     virtual bool replace(const QList<TextReplacement>& replacements, const QString& undoText)

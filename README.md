@@ -157,6 +157,14 @@ of a regular expression `$1` or `\1` is its group (`$0` the whole match),
 and returns to the editor. The program tells the bar of edits
 (`editorTextChanged()`), after which the matches are sought again.
 
+Search in selection (▽, not for a huge target): opened with several lines
+or more than 64 characters selected, the bar seeks and replaces only within
+that selection, shaded beneath the matches (`FindTarget::
+setScopeHighlights()`), and does not take it as the text sought; a shorter
+selection in a line is what is sought, as before. ▽ turns it off, or on by
+hand for the selection then. The selection searched in follows edits before
+and inside it.
+
 ## Interfaces
 
 The interfaces are headers in `api/` (CMake target

@@ -8,6 +8,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -20,6 +21,9 @@ namespace {
 constexpr int maxMatches = 100000;
 // The steps of the progress bar.
 constexpr int progressSteps = 1000;
+// A selection longer than this (or of several lines) is searched in when the
+// bar opens, not searched for.
+constexpr int longSelection = 64;
 
 QToolButton* option(const QString& text, const QString& tip, QWidget* parent) {
     auto* button = new QToolButton(parent);
@@ -61,6 +65,10 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     next->setText(QStringLiteral("↓"));
     next->setToolTip(tr("Next match (Enter, F3)"));
     next->setAutoRaise(true);
+    m_scope = option(QStringLiteral("▽"),
+                     tr("Search in selection (set by itself when the bar opens with several lines or a long "
+                        "text selected)"),
+                     this);
     auto* closeButton = new QToolButton(this);
     closeButton->setText(QStringLiteral("×"));
     closeButton->setToolTip(tr("Close (Escape)"));
@@ -82,6 +90,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     findRow->addWidget(m_progress);
     findRow->addWidget(previous);
     findRow->addWidget(next);
+    findRow->addWidget(m_scope);
     findRow->addWidget(closeButton);
     m_replaceRow = new QWidget(this);
     auto* replaceRow = new QHBoxLayout(m_replaceRow);
@@ -100,6 +109,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     connect(m_find, &QLineEdit::textEdited, this, &FindBarWidget::queryChanged);
     for (QToolButton* button : {m_matchCase, m_wholeWords, m_regex})
         connect(button, &QToolButton::toggled, this, &FindBarWidget::queryChanged);
+    connect(m_scope, &QToolButton::toggled, this, &FindBarWidget::scopeToggled);
     connect(previous, &QToolButton::clicked, this, [this] { step(false); });
     connect(next, &QToolButton::clicked, this, [this] { step(true); });
     connect(closeButton, &QToolButton::clicked, this, &FindBarWidget::close);
@@ -128,12 +138,23 @@ void FindBarWidget::setTarget(FindTarget* target) {
         cancelSearch();
         m_target->setFindListener(nullptr);
         if (isVisible()) {
-            if (huge()) m_target->setQuery({});
-            else m_target->setHighlights({});
+            if (huge()) {
+                m_target->setQuery({});
+            } else {
+                m_target->setHighlights({});
+                m_target->setScopeHighlights({});
+            }
         }
     }
     m_target = target;
     m_matches.clear();
+    // The selection searched in was the other target's.
+    m_scopeAvailable = false;
+    {
+        const QSignalBlocker blocker(m_scope);
+        m_scope->setChecked(false);
+    }
+    m_scope->setVisible(m_target && !m_target->isHuge());
     setEnabled(m_target != nullptr);
     if (m_target) m_target->setFindListener(this);
     updateReplaceRow();
@@ -168,8 +189,26 @@ void FindBarWidget::open(bool replacing) {
     m_replacing = replacing;
     updateReplaceRow();
     if (m_target) {
-        // The selection, within one line, is what is sought.
-        const QString selected = m_target->selectedText();
+        m_scope->setVisible(!huge());
+        // The selection is searched in, when opened with several lines or a
+        // long text selected (shaded); captured before the first match is
+        // selected. A short one in a line is what is sought, unless it is
+        // the match selected (maybe found by a pattern).
+        bool scoped = false;
+        const bool selectedMatch = isVisible() && currentMatch() >= 0;
+        if (!huge() && isHidden()) {
+            takeText();
+            TextRange range;
+            m_scopeAvailable = m_target->selection(&range);
+            if (m_scopeAvailable) {
+                m_scopeStart = offsetOf(range.start);
+                m_scopeEnd = offsetOf(range.end);
+                scoped = range.start.line != range.end.line || m_scopeEnd - m_scopeStart > longSelection;
+            }
+            const QSignalBlocker blocker(m_scope);
+            m_scope->setChecked(scoped);
+        }
+        const QString selected = scoped || selectedMatch ? QString() : m_target->selectedText();
         if (!selected.isEmpty()) m_find->setText(selected);
     }
     show();
@@ -197,6 +236,7 @@ void FindBarWidget::close() {
         m_target->setQuery({});
     } else {
         m_target->setHighlights({});
+        m_target->setScopeHighlights({});
     }
     m_target->widget()->setFocus();
 }
@@ -216,6 +256,61 @@ void FindBarWidget::queryChanged() {
     m_target->selection(&range);
     search();
     selectFrom(offsetOf(range.start), true);
+}
+
+void FindBarWidget::scopeToggled(bool enabled) {
+    if (!m_target || huge()) return;
+    if (enabled && !m_scopeAvailable) {
+        // Turned on by hand: the selection now, if there is one.
+        takeText();
+        TextRange range;
+        if (!m_target->selection(&range)) {
+            const QSignalBlocker blocker(m_scope);
+            m_scope->setChecked(false);
+            return;
+        }
+        m_scopeStart = offsetOf(range.start);
+        m_scopeEnd = offsetOf(range.end);
+        m_scopeAvailable = true;
+    }
+    TextRange range;
+    m_target->selection(&range);
+    const int from = offsetOf(range.start);
+    search();
+    selectFrom(enabled ? m_scopeStart : from, true);
+}
+
+bool FindBarWidget::scoped() const {
+    return m_scope->isChecked() && m_scopeAvailable && !huge();
+}
+
+void FindBarWidget::takeText() {
+    const QString text = m_target->text();
+    if (m_scopeAvailable && text != m_text) {
+        // The selection searched in follows the edit: the part that differs
+        // between the common start and end.
+        const int oldSize = int(m_text.size());
+        const int newSize = int(text.size());
+        int prefix = 0;
+        while (prefix < oldSize && prefix < newSize && m_text.at(prefix) == text.at(prefix)) ++prefix;
+        int oldEnd = oldSize;
+        int newEnd = newSize;
+        while (oldEnd > prefix && newEnd > prefix && m_text.at(oldEnd - 1) == text.at(newEnd - 1)) {
+            --oldEnd;
+            --newEnd;
+        }
+        auto adjust = [prefix, oldEnd, newEnd](int pos, bool end) {
+            if (pos < prefix || (pos == prefix && !end)) return pos;
+            if (pos >= oldEnd) return pos + newEnd - oldEnd;
+            return end ? newEnd : prefix;
+        };
+        m_scopeStart = adjust(m_scopeStart, false);
+        m_scopeEnd = adjust(m_scopeEnd, true);
+    }
+    m_text = text;
+    m_lineStarts = {0};
+    for (int i = 0; i < m_text.size(); ++i)
+        if (m_text.at(i) == QLatin1Char('\n')) m_lineStarts << i + 1;
 }
 
 bool FindBarWidget::search() {
@@ -241,10 +336,10 @@ bool FindBarWidget::search() {
         m_count->setToolTip(m_error);
         return m_error.isEmpty();
     }
-    m_text = m_target->text();
-    m_lineStarts = {0};
-    for (int i = 0; i < m_text.size(); ++i)
-        if (m_text.at(i) == QLatin1Char('\n')) m_lineStarts << i + 1;
+    takeText();
+    m_target->setScopeHighlights(scoped() && m_scopeEnd > m_scopeStart
+                                     ? QList<TextRange>{rangeOf(m_scopeStart, m_scopeEnd)}
+                                     : QList<TextRange>{});
     if (sought.isEmpty() || !m_error.isEmpty()) {
         m_target->setHighlights({});
         showCount();
@@ -255,6 +350,7 @@ bool FindBarWidget::search() {
     while (it.hasNext() && m_matches.size() < maxMatches) {
         const QRegularExpressionMatch found = it.next();
         if (found.capturedLength() == 0) continue;  // nothing to select
+        if (scoped() && (found.capturedStart() < m_scopeStart || found.capturedEnd() > m_scopeEnd)) continue;
         Match match{int(found.capturedStart()), int(found.capturedEnd()), found.capturedTexts()};
         highlights << rangeOf(match.start, match.end);
         m_matches << match;

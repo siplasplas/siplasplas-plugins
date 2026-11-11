@@ -31,6 +31,7 @@ namespace {
 
 // The area's layers of the marks and of the link under the mouse, beside
 // qcodeedit-spell's (100, 101).
+constexpr int ScopeLayer = 109;  // the find bar's selection searched in
 constexpr int MarksLayer = 110;
 constexpr int LinkLayer = 111;
 constexpr int HighlightsLayer = 112;
@@ -273,6 +274,18 @@ void EditorWidget::setHighlights(const QList<TextRange>& ranges)
         selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column},
                            QColor(250, 200, 60, 140), {}, {}});
     m_edit->area()->setExtraSelections(HighlightsLayer, selections);
+}
+
+void EditorWidget::setScopeHighlights(const QList<TextRange>& ranges)
+{
+    // Pale blue (dark blue-grey on a dark background), as in qceditor.
+    const bool dark = m_edit->area()->palette().color(QPalette::Base).lightness() < 128;
+    const QColor shade = dark ? QColor(0x33, 0x40, 0x4f) : QColor(0xe3, 0xec, 0xf7);
+    QVector<qce::ExtraSelection> selections;
+    selections.reserve(ranges.size());
+    for (const TextRange& range : ranges)
+        selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column}, shade, {}, {}});
+    m_edit->area()->setExtraSelections(ScopeLayer, selections);
 }
 
 bool EditorWidget::replace(const QList<TextReplacement>& replacements, const QString& undoText)

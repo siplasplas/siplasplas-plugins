@@ -58,6 +58,13 @@ private:
     void close();
     // The options or the text sought changed.
     void queryChanged();
+    // "Search in selection" turned on or off.
+    void scopeToggled(bool enabled);
+    // Searching in the selection captured (not in a huge target).
+    bool scoped() const;
+    // The target's text and its line starts, the selection searched in
+    // following an edit since the last time.
+    void takeText();
     // Seeks the matches in the target's text (a huge one is given the query
     // to highlight); false for an invalid pattern.
     bool search();
@@ -81,6 +88,7 @@ private:
     QToolButton* m_matchCase = nullptr;
     QToolButton* m_wholeWords = nullptr;
     QToolButton* m_regex = nullptr;
+    QToolButton* m_scope = nullptr;
     QLabel* m_count = nullptr;
     QProgressBar* m_progress = nullptr;
     QWidget* m_replaceRow = nullptr;
@@ -95,6 +103,9 @@ private:
     QList<int> m_lineStarts;   // offsets of its lines
     QList<Match> m_matches;
     QString m_error;           // of an invalid pattern
+    bool m_scopeAvailable = false;  // a selection captured to search in
+    int m_scopeStart = 0;           // its offsets in m_text
+    int m_scopeEnd = 0;
     QTimer m_researching;      // after edits in the target
 };
 

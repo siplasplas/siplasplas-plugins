@@ -69,6 +69,7 @@ public:
     bool selection(TextRange* range) const override;
     void setSelection(TextRange range) override;
     void setHighlights(const QList<TextRange>& ranges) override;
+    void setScopeHighlights(const QList<TextRange>& ranges) override;
     bool replace(const QList<TextReplacement>& replacements, const QString& undoText) override;
     void setBreakpointMargin(bool shown) override;
     bool hasBreakpointMargin() const override;

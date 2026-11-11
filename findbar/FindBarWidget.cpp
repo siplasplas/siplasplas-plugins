@@ -335,11 +335,12 @@ void FindBarWidget::open(bool replacing) {
     updateReplaceRow();
     if (m_target) {
         m_scope->setVisible(!huge());
-        // The selection is searched in, when opened with several lines or a
-        // long text selected (shaded); captured before the first match is
-        // selected. A short one in a line is what is sought, unless it is
+        // A selection of several lines or a long text is not what is sought:
+        // replacing searches in it (shaded), finding searches the whole text
+        // unless ▽ is turned on. It is captured for ▽ before the first match
+        // is selected. A short one in a line is what is sought, unless it is
         // the match selected (maybe found by a pattern).
-        bool scoped = false;
+        bool large = false;
         const bool selectedMatch = m_open && currentMatch() >= 0;
         if (!huge() && !m_open) {
             takeText();
@@ -348,12 +349,12 @@ void FindBarWidget::open(bool replacing) {
             if (m_scopeAvailable) {
                 m_scopeStart = offsetOf(range.start);
                 m_scopeEnd = offsetOf(range.end);
-                scoped = range.start.line != range.end.line || m_scopeEnd - m_scopeStart > longSelection;
+                large = range.start.line != range.end.line || m_scopeEnd - m_scopeStart > longSelection;
             }
             const QSignalBlocker blocker(m_scope);
-            m_scope->setChecked(scoped);
+            m_scope->setChecked(large && replacing && m_target->canReplace());
         }
-        const QString selected = scoped || selectedMatch ? QString() : m_target->selectedText();
+        const QString selected = large || selectedMatch ? QString() : m_target->selectedText();
         if (!selected.isEmpty()) m_find->setText(selected);
     }
     setOpen(true);

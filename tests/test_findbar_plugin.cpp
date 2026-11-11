@@ -140,7 +140,7 @@ TEST(FindBar, SearchesInASelectionOfSeveralLines)
     EXPECT_TRUE(f.count().endsWith(QStringLiteral("/4")));
 }
 
-TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
+TEST(FindBar, ShortSelectionIsSoughtLongOneReplacedIn)
 {
     {
         Fixture f("alpha beta alpha\n");
@@ -149,11 +149,25 @@ TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
         EXPECT_FALSE(f.option(QStringLiteral("▽"))->isChecked());
         EXPECT_EQ(f.count(), QStringLiteral("1/2"));
     }
+    const QByteArray line = QByteArray(70, 'a') + " end a\n";
     {
-        const QByteArray line = QByteArray(70, 'a') + " end a\n";
+        // Finding: the whole text, the long selection not sought.
         Fixture f(line);
         f.view->setSelection({{0, 0}, {0, 70}});
         f.bar.showFind();
+        EXPECT_FALSE(f.option(QStringLiteral("▽"))->isChecked());
+        EXPECT_TRUE(f.bar.findChildren<QLineEdit*>().first()->text().isEmpty());
+        f.seek(QStringLiteral("a"));
+        EXPECT_EQ(f.count(), QStringLiteral("1/71"));
+        // ▽ by hand: the selection the bar opened with.
+        f.option(QStringLiteral("▽"))->setChecked(true);
+        EXPECT_EQ(f.count(), QStringLiteral("1/70"));
+    }
+    {
+        // Replacing: in the selection.
+        Fixture f(line);
+        f.view->setSelection({{0, 0}, {0, 70}});
+        f.bar.showReplace();
         EXPECT_TRUE(f.option(QStringLiteral("▽"))->isChecked());
         f.seek(QStringLiteral("a"));
         EXPECT_EQ(f.count(), QStringLiteral("1/70"));

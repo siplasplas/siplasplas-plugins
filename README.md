@@ -186,13 +186,14 @@ break, `\t` a tab, `\r` a carriage return, `\\` and `$$` themselves. Escape clos
 and returns to the editor. The program tells the bar of edits
 (`editorTextChanged()`), after which the matches are sought again.
 
-Search in selection (▽, not for a huge target): opened with several lines
-or more than 64 characters selected, the bar seeks and replaces only within
-that selection, shaded beneath the matches (`FindTarget::
-setScopeHighlights()`), and does not take it as the text sought; a shorter
-selection in a line is what is sought, as before. ▽ turns it off, or on by
-hand for the selection then. The selection searched in follows edits before
-and inside it.
+Search in selection (▽, not for a huge target): opened for replacing
+(`showReplace()`) with several lines or more than 64 characters selected,
+the bar seeks and replaces only within that selection, shaded beneath the
+matches (`FindTarget::setScopeHighlights()`). Opened for finding, such a
+selection is neither searched in nor sought: the whole text is searched,
+and ▽ turns searching in it on by hand (the selection the bar opened with,
+or the one then). A shorter selection in a line is what is sought. The
+selection searched in follows edits before and inside it.
 
 ## Interfaces
 

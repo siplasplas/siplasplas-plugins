@@ -268,12 +268,14 @@ void EditorWidget::setSelection(TextRange range)
 
 void EditorWidget::setHighlights(const QList<TextRange>& ranges)
 {
-    // Matches in amber, as search matches are elsewhere.
+    // Matches in orange (dark orange on a dark background), apart from the
+    // selection, which the find bar keeps for the current match.
+    const bool dark = m_edit->area()->palette().color(QPalette::Base).lightness() < 128;
+    const QColor orange = dark ? QColor(0x8d, 0x4d, 0x13) : QColor(0xff, 0xae, 0x52);
     QVector<qce::ExtraSelection> selections;
     selections.reserve(ranges.size());
     for (const TextRange& range : ranges)
-        selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column},
-                           QColor(250, 200, 60, 140), {}, {}});
+        selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column}, orange, {}, {}});
     m_edit->area()->setExtraSelections(HighlightsLayer, selections);
 }
 

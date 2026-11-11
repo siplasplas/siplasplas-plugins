@@ -480,6 +480,79 @@ TEST(FindBar, OnTopCoversOrMovesTheTextDown)
     bar->setEditor(nullptr);
 }
 
+TEST(FindBar, F3WithTheBarClosed)
+{
+    Fixture f("one two one\n");
+    f.bar.showFind();
+    f.seek(QStringLiteral("one"));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(f.bar.findChildren<QLineEdit*>().first(), &escape);
+    ASSERT_TRUE(f.bar.isHidden());
+    // The next match of the last query, the bar staying closed.
+    f.bar.findNext();
+    EXPECT_TRUE(f.bar.isHidden());
+    spp::TextRange range;
+    ASSERT_TRUE(f.view->selection(&range));
+    EXPECT_EQ(range.start.column, 8);
+    // Sought in the text as it is now.
+    f.view->replace({spp::TextReplacement{{{0, 4}, {0, 7}}, QStringLiteral("one")}}, QStringLiteral("Edit"));
+    f.view->setCursorPosition({0, 1});  // inside the first "one"
+    f.bar.findNext();
+    ASSERT_TRUE(f.view->selection(&range));
+    EXPECT_EQ(range.start.column, 4);  // the "one" made by the edit
+    EXPECT_TRUE(f.bar.isHidden());
+}
+
+namespace {
+
+// Records the highlights the bar sets.
+struct RecordingTarget : spp::FindTarget {
+    QWidget view;
+    QString content;
+    spp::TextRange selected;
+    bool hasSelection = false;
+    QList<spp::TextRange> highlights;
+
+    QWidget* widget() override { return &view; }
+    bool canReplace() const override { return false; }
+    bool isHuge() const override { return false; }
+    QString selectedText() const override { return {}; }
+    QString text() const override { return content; }
+    bool selection(spp::TextRange* range) const override
+    {
+        *range = selected;
+        return hasSelection;
+    }
+    void setSelection(spp::TextRange range) override
+    {
+        selected = range;
+        hasSelection = true;
+    }
+    void setHighlights(const QList<spp::TextRange>& ranges) override { highlights = ranges; }
+};
+
+} // namespace
+
+TEST(FindBar, TheCurrentMatchIsTheSelectionNotAHighlight)
+{
+    RecordingTarget target;
+    target.content = QStringLiteral("ab ab ab");
+    spp::FindBarWidget bar;
+    bar.setTarget(&target);
+    bar.showFind();
+    auto* find = bar.findChildren<QLineEdit*>().first();
+    find->setText(QStringLiteral("ab"));
+    emit find->textEdited(find->text());
+    ASSERT_EQ(target.highlights.size(), 2);
+    EXPECT_EQ(target.selected.start.column, 0);
+    for (const spp::TextRange& range : target.highlights) EXPECT_NE(range.start.column, 0);
+    bar.findNext();
+    EXPECT_EQ(target.selected.start.column, 3);
+    ASSERT_EQ(target.highlights.size(), 2);
+    for (const spp::TextRange& range : target.highlights) EXPECT_NE(range.start.column, 3);
+    bar.setTarget(nullptr);
+}
+
 TEST(FindBar, ExpandsReplacements)
 {
     const QStringList captures{QStringLiteral("a=1"), QStringLiteral("a"), QStringLiteral("1")};

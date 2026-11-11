@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 #include "FindBarWidget.h"
 
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -9,6 +10,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalBlocker>
+#include <QToolTip>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -489,7 +491,8 @@ bool FindBarWidget::search() {
         return m_error.isEmpty();
     }
     takeText();
-    m_target->setScopeHighlights(scoped() && m_scopeEnd > m_scopeStart
+    // Closed (F3), nothing is shown but the match selected.
+    m_target->setScopeHighlights(m_open && scoped() && m_scopeEnd > m_scopeStart
                                      ? QList<TextRange>{rangeOf(m_scopeStart, m_scopeEnd)}
                                      : QList<TextRange>{});
     if (sought.isEmpty() || !m_error.isEmpty()) {
@@ -497,7 +500,6 @@ bool FindBarWidget::search() {
         showCount();
         return m_error.isEmpty();
     }
-    QList<TextRange> highlights;
     QRegularExpressionMatchIterator it = expression.globalMatch(m_text);
     while (it.hasNext() && m_matches.size() < maxMatches) {
         const QRegularExpressionMatch found = it.next();
@@ -507,12 +509,27 @@ bool FindBarWidget::search() {
         if (std::any_of(m_excluded.cbegin(), m_excluded.cend(),
                         [&match](const Match& m) { return m.start == match.start && m.end == match.end; }))
             continue;
-        highlights << rangeOf(match.start, match.end);
         m_matches << match;
     }
-    m_target->setHighlights(highlights);
+    updateHighlights();
     showCount();
     return true;
+}
+
+void FindBarWidget::updateHighlights() {
+    if (!m_target || huge()) return;
+    if (!m_open) {
+        m_target->setHighlights({});
+        return;
+    }
+    // Every match but the current one, which is the selection (to copy, or
+    // to replace).
+    const int current = currentMatch();
+    QList<TextRange> highlights;
+    highlights.reserve(m_matches.size());
+    for (int i = 0; i < m_matches.size(); ++i)
+        if (i != current) highlights << rangeOf(m_matches.at(i).start, m_matches.at(i).end);
+    m_target->setHighlights(highlights);
 }
 
 TextRange FindBarWidget::rangeOf(int start, int end) const {
@@ -540,10 +557,10 @@ int FindBarWidget::currentMatch() const {
     return -1;
 }
 
-void FindBarWidget::selectFrom(int offset, bool forward) {
+bool FindBarWidget::selectFrom(int offset, bool forward) {
     if (!m_target || m_matches.isEmpty()) {
         showCount();
-        return;
+        return false;
     }
     int index = -1;
     if (forward) {
@@ -557,34 +574,47 @@ void FindBarWidget::selectFrom(int offset, bool forward) {
     }
     if (index < 0) {  // the end (start) without wrapping around: the selection stays
         showCount();
-        return;
+        return false;
     }
     m_target->setSelection(rangeOf(m_matches.at(index).start, m_matches.at(index).end));
+    updateHighlights();
     revealSelection();
     showCount();
+    return true;
 }
 
 void FindBarWidget::step(bool forward) {
     if (!m_target) return;
-    if (!m_open) {
-        open(false);
+    if (!m_open && m_find->text().isEmpty()) {
+        open(false);  // nothing sought yet
         return;
     }
     if (huge()) {
-        if (m_find->text().isEmpty() || !m_error.isEmpty()) return;
-        // Shown before find(), which may finish at once.
+        if (!m_error.isEmpty()) return;
+        // Shown before find(), which may finish at once. Closed (F3), the
+        // bar opens only for a search that takes a while.
         m_searching = true;
+        m_shownForSearch = false;
+        m_searchStarted.start();
         m_progress->setValue(0);
-        m_progress->show();
-        m_count->hide();
+        m_progress->setVisible(m_open);
+        m_count->setVisible(!m_open);
         m_target->find(query(), forward);
         return;
     }
-    if (m_matches.isEmpty() && !search()) return;
+    // Closed (F3), the matches are sought again in the text as it is now,
+    // showing nothing but the match selected.
+    if ((!m_open || m_matches.isEmpty()) && !search()) return;
     TextRange range;
     m_target->selection(&range);
     // From the selected match on, or from the cursor.
-    selectFrom(forward ? offsetOf(range.end) : offsetOf(range.start), forward);
+    if (!selectFrom(forward ? offsetOf(range.end) : offsetOf(range.start), forward) && !m_open) showNotFound();
+}
+
+void FindBarWidget::showNotFound() {
+    QWidget* anchor = m_target->widget();
+    QToolTip::showText(anchor->mapToGlobal(QPoint(anchor->width() / 4, anchor->height() / 4)),
+                       tr("\"%1\" not found").arg(m_find->text()), anchor);
 }
 
 void FindBarWidget::cancelSearch() {
@@ -597,6 +627,13 @@ void FindBarWidget::cancelSearch() {
 
 void FindBarWidget::findProgress(qint64 done, qint64 total) {
     if (!m_searching || total <= 0) return;
+    if (!m_open && m_searchStarted.elapsed() >= 300) {
+        // F3 taking a while: the bar shows its progress (and Escape).
+        m_shownForSearch = true;
+        setOpen(true);
+        m_count->hide();
+        m_progress->show();
+    }
     m_progress->setValue(int(std::clamp(done, qint64(0), total) * progressSteps / total));
 }
 
@@ -605,6 +642,13 @@ void FindBarWidget::findFinished(FindResult result) {
     m_searching = false;
     m_progress->hide();
     m_count->show();
+    // Shown only for the search: closed again, unless the user went into it.
+    if (m_shownForSearch && !m_panel->isAncestorOf(QApplication::focusWidget())) setOpen(false);
+    m_shownForSearch = false;
+    if (!m_open && result == FindResult::NotFound) {
+        showNotFound();
+        return;
+    }
     switch (result) {
     case FindResult::Found: showStatus({}, false); break;
     case FindResult::Wrapped: showStatus(tr("Wrapped"), false); break;
@@ -651,17 +695,15 @@ void FindBarWidget::excludeCurrent() {
     const int index = currentMatch();
     if (index < 0) return;
     m_excluded << m_matches.takeAt(index);
-    QList<TextRange> highlights;
-    highlights.reserve(m_matches.size());
-    for (const Match& match : std::as_const(m_matches)) highlights << rangeOf(match.start, match.end);
-    m_target->setHighlights(highlights);
     if (m_matches.isEmpty()) {
+        updateHighlights();
         showCount();
         return;
     }
     // The match that came next, or the last one.
     const Match& next = m_matches.at(std::min(index, int(m_matches.size()) - 1));
     m_target->setSelection(rangeOf(next.start, next.end));
+    updateHighlights();
     revealSelection();
     showCount();
 }

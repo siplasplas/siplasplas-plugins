@@ -4,6 +4,7 @@
 
 #include "siplasplas/plugin/FindPlugin.h"
 
+#include <QElapsedTimer>
 #include <QList>
 #include <QPointer>
 #include <QStringList>
@@ -89,8 +90,12 @@ private:
     // to highlight); false for an invalid pattern.
     bool search();
     // Selects the match nearest after (or before) `offset`, around the end
-    // when wrapping around.
-    void selectFrom(int offset, bool forward);
+    // when wrapping around; false when none is.
+    bool selectFrom(int offset, bool forward);
+    // Highlights the matches but the one selected; none while closed.
+    void updateHighlights();
+    // A tooltip on the target, for F3 with the bar closed.
+    void showNotFound();
     void step(bool forward);
     // Stops a huge target's search running.
     void cancelSearch();
@@ -131,6 +136,8 @@ private:
     FindTarget* m_target = nullptr;
     bool m_replacing = false;  // the Replace row is open, where the target can replace
     bool m_searching = false;  // a huge target's find() runs
+    bool m_shownForSearch = false;  // opened by a long F3 search, closed after it
+    QElapsedTimer m_searchStarted;
     QString m_text;            // the target's text searched
     QList<int> m_lineStarts;   // offsets of its lines
     QList<Match> m_matches;

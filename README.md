@@ -156,7 +156,9 @@ A target has two traits of its own:
 
 An editor is never huge and replaces unless it is read-only. For a target
 that is not huge, the bar seeks in its text itself: it seeks as one types
-and highlights every match, selecting the first from where the search began;
+and highlights every match in orange but the current one, which is the
+selection (so it can be copied), selecting the first from where the search
+began;
 it says "3/17" ("0/17" with no match selected, "No matches", or "Invalid"
 for a wrong regular expression). Options: wrap around (↩, on by default),
 match case (Cc, Alt+C),
@@ -164,7 +166,12 @@ whole words (Alt+W), regular expression (Alt+X). Enter and the ↓ button go
 to the next match, Shift+Enter and ↑ to the previous one, around the end
 while wrapping around (otherwise the last and the first match stay
 selected; a huge target gets `FindQuery::wrap`); `findNext()` and `findPrevious()`
-do it for the program's keys (F3, Shift+F3). The ▸ button at the left shows
+do it for the program's keys (F3, Shift+F3). With the bar closed they go to
+the next or previous match of the last text sought, sought again in the
+text as it is now, without opening the bar or highlighting anything ("not
+found" in a tooltip on the target); a huge target's search that takes more
+than 0.3 s opens the bar for its progress, closing it after unless the focus
+went into it. With nothing sought yet they open the bar. The ▸ button at the left shows
 or hides the Replace row (`showReplace()` shows it and focuses the
 replacement; `showFind()` leaves it as it was; a read-only target has
 neither). For replacing: Replace replaces the selected match and selects the

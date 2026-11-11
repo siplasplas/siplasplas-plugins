@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // The find bar on an editor of the editor plugin (offscreen): matches and
 // their count, the options, stepping around the end, Replace and Replace All
-// (one undo step), and the expansion of a regular expression's replacement.
+// (one undo step), none in a read-only editor, and the expansion of a regular
+// expression's replacement; and on a huge target that seeks itself.
 
 #include "FindBarWidget.h"
 
@@ -16,6 +17,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPluginLoader>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QToolButton>
@@ -145,6 +147,124 @@ TEST(FindBar, StartsWithTheSelectionAndCloses)
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(f.bar.findChildren<QLineEdit*>().first(), &escape);
     EXPECT_TRUE(f.bar.isHidden());
+}
+
+TEST(FindBar, NoReplacingInAReadOnlyEditor)
+{
+    Fixture f("a a a\n");
+    f.view->setReadOnly(true);
+    f.bar.showReplace();
+    QPushButton* replaceAll = nullptr;
+    for (auto* button : f.bar.findChildren<QPushButton*>())
+        if (button->text() == QStringLiteral("Replace All")) replaceAll = button;
+    ASSERT_NE(replaceAll, nullptr);
+    EXPECT_TRUE(replaceAll->parentWidget()->isHidden());
+    f.seek(QStringLiteral("a"));
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));  // finding still works
+    replaceAll->click();
+    EXPECT_EQ(f.view->text(), QStringLiteral("a a a"));
+    // Writable again: the next showReplace() has the row.
+    f.view->setReadOnly(false);
+    f.bar.showReplace();
+    EXPECT_FALSE(replaceAll->parentWidget()->isHidden());
+}
+
+namespace {
+
+// A huge target whose search the test ends by hand.
+struct HugeTarget : spp::FindTarget {
+    QWidget view;
+    spp::FindTargetListener* listener = nullptr;
+    spp::FindQuery query;
+    int finds = 0;
+    bool forward = false;
+    int cancels = 0;
+
+    QWidget* widget() override { return &view; }
+    bool canReplace() const override { return false; }
+    bool isHuge() const override { return true; }
+    QString selectedText() const override { return QStringLiteral("seed"); }
+    void setQuery(const spp::FindQuery& q) override { query = q; }
+    void find(const spp::FindQuery& q, bool fwd) override
+    {
+        query = q;
+        forward = fwd;
+        ++finds;
+    }
+    void cancelFind() override { ++cancels; }
+    void setFindListener(spp::FindTargetListener* l) override { listener = l; }
+};
+
+} // namespace
+
+TEST(FindBar, HugeTargetSeeksItselfWithProgress)
+{
+    HugeTarget target;
+    spp::FindBarWidget bar;
+    bar.setTarget(&target);
+    ASSERT_NE(target.listener, nullptr);
+    auto* find = bar.findChildren<QLineEdit*>().first();
+    auto* label = bar.findChild<QLabel*>();
+    auto* progress = bar.findChild<QProgressBar*>();
+
+    // Opening seeds the text and gives it to the target to highlight, but
+    // does not seek; no Replace row for a read-only target.
+    bar.showReplace();
+    EXPECT_EQ(find->text(), QStringLiteral("seed"));
+    EXPECT_EQ(target.query.text, QStringLiteral("seed"));
+    EXPECT_EQ(target.finds, 0);
+    for (auto* button : bar.findChildren<QPushButton*>())
+        EXPECT_TRUE(button->parentWidget()->isHidden());
+
+    // Typing only highlights.
+    find->setText(QStringLiteral("abc"));
+    emit find->textEdited(find->text());
+    EXPECT_EQ(target.query.text, QStringLiteral("abc"));
+    EXPECT_EQ(target.finds, 0);
+
+    // Seeking: progress instead of the count, then the result.
+    bar.findNext();
+    EXPECT_EQ(target.finds, 1);
+    EXPECT_TRUE(target.forward);
+    EXPECT_FALSE(progress->isHidden());
+    EXPECT_TRUE(label->isHidden());
+    target.listener->findProgress(50, 100);
+    EXPECT_EQ(progress->value(), progress->maximum() / 2);
+    target.listener->findFinished(spp::FindResult::Wrapped);
+    EXPECT_TRUE(progress->isHidden());
+    EXPECT_EQ(label->text(), QStringLiteral("Wrapped"));
+    bar.findPrevious();
+    EXPECT_FALSE(target.forward);
+    target.listener->findFinished(spp::FindResult::NotFound);
+    EXPECT_EQ(label->text(), QStringLiteral("No matches"));
+
+    // The first Escape cancels a search, a late end of it is let go; the
+    // second closes the bar and removes the highlights.
+    bar.findNext();
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(find, &escape);
+    EXPECT_EQ(target.cancels, 1);
+    EXPECT_EQ(label->text(), QStringLiteral("Cancelled"));
+    target.listener->findFinished(spp::FindResult::Found);
+    EXPECT_EQ(label->text(), QStringLiteral("Cancelled"));
+    EXPECT_FALSE(bar.isHidden());
+    QCoreApplication::sendEvent(find, &escape);
+    EXPECT_TRUE(bar.isHidden());
+    EXPECT_TRUE(target.query.text.isEmpty());
+
+    // An invalid pattern is not sought.
+    bar.showFind();
+    for (auto* button : bar.findChildren<QToolButton*>())
+        if (button->text() == QStringLiteral(".*")) button->setChecked(true);
+    find->setText(QStringLiteral("("));
+    emit find->textEdited(find->text());
+    EXPECT_EQ(label->text(), QStringLiteral("Invalid"));
+    const int finds = target.finds;
+    bar.findNext();
+    EXPECT_EQ(target.finds, finds);
+
+    bar.setTarget(nullptr);
+    EXPECT_EQ(target.listener, nullptr);
 }
 
 TEST(FindBar, ExpandsReplacements)

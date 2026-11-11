@@ -243,6 +243,13 @@ QString EditorWidget::text() const
     return m_document->toPlainText();
 }
 
+QString EditorWidget::selectedText() const
+{
+    TextRange range;
+    if (!selection(&range) || range.start.line != range.end.line) return {};
+    return m_document->lineAt(range.start.line).mid(range.start.column, range.end.column - range.start.column);
+}
+
 bool EditorWidget::selection(TextRange* range) const
 {
     qce::CodeEditArea* area = m_edit->area();

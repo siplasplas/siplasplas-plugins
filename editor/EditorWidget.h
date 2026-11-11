@@ -3,6 +3,7 @@
 #define SPP_EDITOR_EDITORWIDGET_H
 
 #include "siplasplas/plugin/EditorPlugin.h"
+#include "siplasplas/plugin/FindPlugin.h"
 
 #include <QWidget>
 
@@ -26,13 +27,20 @@ class CompletionPopup;
 // The editor of the plugin: qcodeedit's CodeEdit with line numbers and
 // folding, the file read and saved by qce::encoding::TextFile and coloured by
 // qce::kate::EditorSyntax.
-class EditorWidget : public QWidget, public EditorView {
+// It is also its own find target: text(), selection(), setSelection(),
+// setHighlights(), replace() and widget() serve both interfaces.
+class EditorWidget : public QWidget, public EditorView, public FindTarget {
     Q_OBJECT
 public:
     explicit EditorWidget(QWidget* parent = nullptr);
     ~EditorWidget() override;
 
     QWidget* widget() override { return this; }
+
+    FindTarget* findTarget() override { return this; }
+    bool canReplace() const override { return !isReadOnly(); }
+    bool isHuge() const override { return false; }
+    QString selectedText() const override;
 
     EditorResult open(const QString& path, const QString& encoding) override;
     EditorResult reopen(const QString& encoding) override;

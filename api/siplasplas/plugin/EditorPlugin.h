@@ -25,6 +25,8 @@ class QWidget;
 
 namespace spp {
 
+class FindTarget;
+
 // A place in the text: line and column from 0; the column counts UTF-16
 // code units (QString indexes) in the line.
 struct TextPosition {
@@ -169,6 +171,10 @@ public:
     // undo step named `undoText`; false, doing nothing, in a read-only view
     // or with nothing to replace.
     virtual bool replace(const QList<TextReplacement>& replacements, const QString& undoText) = 0;
+    // The editor as the find plugin's target (siplasplas/plugin/
+    // FindPlugin.h): never huge, replacing unless read-only. Lives as long as
+    // the view.
+    virtual FindTarget* findTarget() = 0;
 
     // Underlines the ranges (errors red, warnings amber, information blue,
     // hints grey) and shows their messages when the mouse rests on them;
@@ -232,7 +238,7 @@ public:
 
 } // namespace spp
 
-#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/8"
+#define SPP_EDITOR_PLUGIN_IID "io.github.siplasplas.plugins.EditorPlugin/9"
 Q_DECLARE_INTERFACE(spp::EditorPlugin, SPP_EDITOR_PLUGIN_IID)
 
 #endif // SIPLASPLAS_PLUGIN_EDITORPLUGIN_H

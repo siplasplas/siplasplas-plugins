@@ -12,7 +12,7 @@ dependencies (e.g. libarchive) out of the programs, which work without it.
 |--------|-----------|-------|------|
 | `spp-archive` | `spp::ArchivePlugin` (`siplasplas/plugin/ArchivePlugin.h`) | libarchive (libarchive-dev); optionally `lsar`/`unar` (unar) and `7z` (p7zip-full or 7zip) at run time | lists archives (with progress, cancelling and passwords), extracts all or chosen entries (asking about existing targets: overwrite, skip or cancel) and reads the start of an entry without decompressing the rest, for previews — also of every file on the way to it (`readEntries`), which a solid archive decompresses anyway; packs files and directories (with progress, cancelling, compression level, a password for zip, volumes) |
 | `spp-editor` | `spp::EditorPlugin`, `spp::EditorView` (`siplasplas/plugin/EditorPlugin.h`) | Qt Widgets; [qcodeedit](https://github.com/siplasplas/qcodeedit) 1.70 with [cpg](https://github.com/siplasplas/cpg), fetched and built in (ICU, libicu-dev) | a code editor widget for the program's own window and tabs: opens and saves files in their encoding, colours them with Kate syntax definitions and the Kate theme matching the desktop, reloads files changed on disk as one undo step; see below |
-| `spp-findbar` | `spp::FindPlugin`, `spp::FindBar` (`siplasplas/plugin/FindPlugin.h`) | Qt Widgets | a find and replace bar for the editor plugin's editors, through their interface only; see below |
+| `spp-findbar` | `spp::FindPlugin`, `spp::FindBar`, `spp::FindTarget` (`siplasplas/plugin/FindPlugin.h`) | Qt Widgets | a find and replace bar for the editor plugin's editors and other find targets (e.g. a viewer of huge files), through their interface only; see below |
 
 Extracting keeps the entries' times and permissions (also of read-only
 directories, set at the end), makes symbolic links, and never writes outside
@@ -123,9 +123,25 @@ moves away.
 ### The find bar plugin
 
 `FindPlugin::createFindBar()` gives a bar for the program to put into its
-window, under the editors; `setEditor()` tells it which `EditorView` it works
-on (the current tab's). `showFind()` and `showReplace()` show it with the
-editor's selection, within a line, as the text sought. It seeks as one types
+window, under the editors; `setTarget()` tells it which `FindTarget` it
+works on (the current tab's), `setEditor()` the same for an `EditorView`
+(`EditorView::findTarget()`). `showFind()` and `showReplace()` show it with
+the target's selection, within a line, as the text sought.
+
+A target has two traits of its own:
+
+- `canReplace()`: false for a read-only target (a read-only editor, a
+  viewer); the bar shows no Replace row then, also for `showReplace()`.
+- `isHuge()`: the text is too large to hold in memory (a file of
+  gigabytes). Typing then only gives the target the query (`setQuery()`),
+  and it highlights the matches in the part it shows; Enter, ↓ and ↑ ask it
+  for the next or previous match (`find()`), which it seeks in the
+  background, the bar showing the progress instead of a count; Escape
+  cancels the search (a second one closes the bar). The bar then says
+  "Wrapped", "No matches" or "Cancelled", never "3 of 17".
+
+An editor is never huge and replaces unless it is read-only. For a target
+that is not huge, the bar seeks in its text itself: it seeks as one types
 and highlights every match, selecting the first from where the search began;
 it says "3 of 17" (or "No matches", or "Invalid" for a wrong regular
 expression). Options: match case (Alt+C), whole words (Alt+W), regular

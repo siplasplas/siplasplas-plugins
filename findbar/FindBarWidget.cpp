@@ -5,6 +5,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QToolButton>
@@ -17,6 +18,8 @@ namespace {
 
 // More matches than this are not sought: the count says so.
 constexpr int maxMatches = 100000;
+// The steps of the progress bar.
+constexpr int progressSteps = 1000;
 
 QToolButton* option(const QString& text, const QString& tip, QWidget* parent) {
     auto* button = new QToolButton(parent);
@@ -42,6 +45,12 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_regex->setShortcut(QKeySequence(Qt::ALT | Qt::Key_X));
     m_count = new QLabel(this);
     m_count->setMinimumWidth(m_count->fontMetrics().horizontalAdvance(QStringLiteral("99999 of 99999")));
+    m_progress = new QProgressBar(this);
+    m_progress->setRange(0, progressSteps);
+    m_progress->setTextVisible(false);
+    m_progress->setMaximumWidth(m_count->minimumWidth());
+    m_progress->setToolTip(tr("Searching (Escape cancels)"));
+    m_progress->hide();
     auto* previous = new QToolButton(this);
     previous->setText(QStringLiteral("↑"));
     previous->setToolTip(tr("Previous match (Shift+Enter, Shift+F3)"));
@@ -67,6 +76,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     findRow->addWidget(m_wholeWords);
     findRow->addWidget(m_regex);
     findRow->addWidget(m_count);
+    findRow->addWidget(m_progress);
     findRow->addWidget(previous);
     findRow->addWidget(next);
     findRow->addWidget(closeButton);
@@ -82,22 +92,11 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     layout->addLayout(findRow);
     layout->addWidget(m_replaceRow);
 
-    // Typing seeks at once, from where the search began.
-    connect(m_find, &QLineEdit::textEdited, this, [this] {
-        TextRange range;
-        if (!m_editor) return;
-        m_editor->selection(&range);
-        search();
-        selectFrom(offsetOf(range.start), true);
-    });
+    // Typing seeks at once, from where the search began (a huge target
+    // highlights what it shows; Enter seeks).
+    connect(m_find, &QLineEdit::textEdited, this, &FindBarWidget::queryChanged);
     for (QToolButton* button : {m_matchCase, m_wholeWords, m_regex})
-        connect(button, &QToolButton::toggled, this, [this] {
-            if (!m_editor) return;
-            TextRange range;
-            m_editor->selection(&range);
-            search();
-            selectFrom(offsetOf(range.start), true);
-        });
+        connect(button, &QToolButton::toggled, this, &FindBarWidget::queryChanged);
     connect(previous, &QToolButton::clicked, this, [this] { step(false); });
     connect(next, &QToolButton::clicked, this, [this] { step(true); });
     connect(closeButton, &QToolButton::clicked, this, &FindBarWidget::close);
@@ -110,21 +109,39 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_researching.setSingleShot(true);
     m_researching.setInterval(200);
     connect(&m_researching, &QTimer::timeout, this, [this] {
-        if (isVisible() && search()) showCount();
+        if (isVisible() && search() && !huge()) showCount();
     });
+    m_replaceRow->hide();
     hide();
 }
 
-void FindBarWidget::setEditor(EditorView* editor) {
-    if (editor == m_editor) return;
-    if (m_editor && isVisible()) m_editor->setHighlights({});
-    m_editor = editor;
-    m_matches.clear();
-    setEnabled(m_editor != nullptr);
-    if (m_editor && isVisible()) {
-        search();
-        showCount();
+FindBarWidget::~FindBarWidget() {
+    setTarget(nullptr);
+}
+
+void FindBarWidget::setTarget(FindTarget* target) {
+    if (target == m_target) return;
+    if (m_target) {
+        cancelSearch();
+        m_target->setFindListener(nullptr);
+        if (isVisible()) {
+            if (huge()) m_target->setQuery({});
+            else m_target->setHighlights({});
+        }
     }
+    m_target = target;
+    m_matches.clear();
+    setEnabled(m_target != nullptr);
+    if (m_target) m_target->setFindListener(this);
+    updateReplaceRow();
+    if (m_target && isVisible()) {
+        search();
+        if (!huge()) showCount();
+    }
+}
+
+void FindBarWidget::setEditor(EditorView* editor) {
+    setTarget(editor ? editor->findTarget() : nullptr);
 }
 
 void FindBarWidget::showFind() {
@@ -135,24 +152,34 @@ void FindBarWidget::showReplace() {
     open(true);
 }
 
+FindQuery FindBarWidget::query() const {
+    return {m_find->text(), m_matchCase->isChecked(), m_wholeWords->isChecked(), m_regex->isChecked()};
+}
+
+void FindBarWidget::updateReplaceRow() {
+    m_replaceRow->setVisible(m_replacing && m_target && m_target->canReplace());
+}
+
 void FindBarWidget::open(bool replacing) {
-    m_replaceRow->setVisible(replacing);
-    if (m_editor) {
+    m_replacing = replacing;
+    updateReplaceRow();
+    if (m_target) {
         // The selection, within one line, is what is sought.
-        TextRange range;
-        if (m_editor->selection(&range) && range.start.line == range.end.line) {
-            const QString line = m_editor->text().section(QLatin1Char('\n'), range.start.line, range.start.line);
-            m_find->setText(line.mid(range.start.column, range.end.column - range.start.column));
-        }
-        m_replaceButton->setEnabled(!m_editor->isReadOnly());
-        m_replaceAllButton->setEnabled(!m_editor->isReadOnly());
+        const QString selected = m_target->selectedText();
+        if (!selected.isEmpty()) m_find->setText(selected);
     }
     show();
     m_find->setFocus();
     m_find->selectAll();
-    if (m_editor && search()) {
+    if (!m_target) return;
+    if (huge()) {
+        // Seeking a file of gigabytes waits for Enter.
+        if (!m_searching) search();
+        return;
+    }
+    if (search()) {
         TextRange range;
-        m_editor->selection(&range);
+        m_target->selection(&range);
         selectFrom(offsetOf(range.start), true);
     }
 }
@@ -160,40 +187,64 @@ void FindBarWidget::open(bool replacing) {
 void FindBarWidget::close() {
     hide();
     m_researching.stop();
-    if (m_editor) {
-        m_editor->setHighlights({});
-        m_editor->widget()->setFocus();
+    if (!m_target) return;
+    if (huge()) {
+        cancelSearch();
+        m_target->setQuery({});
+    } else {
+        m_target->setHighlights({});
     }
+    m_target->widget()->setFocus();
 }
 
 void FindBarWidget::editorTextChanged() {
     if (isVisible()) m_researching.start();
 }
 
+void FindBarWidget::queryChanged() {
+    if (!m_target) return;
+    if (huge()) {
+        cancelSearch();
+        search();
+        return;
+    }
+    TextRange range;
+    m_target->selection(&range);
+    search();
+    selectFrom(offsetOf(range.start), true);
+}
+
 bool FindBarWidget::search() {
     m_matches.clear();
     m_error.clear();
-    if (!m_editor) return false;
-    m_text = m_editor->text();
+    if (!m_target) return false;
+    const QString sought = m_find->text();
+    QRegularExpression expression;
+    if (!sought.isEmpty()) {
+        QString pattern = m_regex->isChecked() ? sought : QRegularExpression::escape(sought);
+        if (m_wholeWords->isChecked()) pattern = QStringLiteral("\\b(?:%1)\\b").arg(pattern);
+        expression.setPattern(pattern);
+        expression.setPatternOptions(
+            (m_matchCase->isChecked() ? QRegularExpression::NoPatternOption : QRegularExpression::CaseInsensitiveOption)
+            | QRegularExpression::UseUnicodePropertiesOption);
+        if (!expression.isValid()) m_error = expression.errorString();
+    }
+    if (huge()) {
+        // The target seeks itself; it highlights the matches it shows.
+        m_target->setQuery(m_error.isEmpty() ? query() : FindQuery{});
+        if (!m_error.isEmpty()) showStatus(tr("Invalid"), true);
+        else showStatus({}, false);
+        m_count->setToolTip(m_error);
+        return m_error.isEmpty();
+    }
+    m_text = m_target->text();
     m_lineStarts = {0};
     for (int i = 0; i < m_text.size(); ++i)
         if (m_text.at(i) == QLatin1Char('\n')) m_lineStarts << i + 1;
-    const QString sought = m_find->text();
-    if (sought.isEmpty()) {
-        m_editor->setHighlights({});
+    if (sought.isEmpty() || !m_error.isEmpty()) {
+        m_target->setHighlights({});
         showCount();
-        return true;
-    }
-    QString pattern = m_regex->isChecked() ? sought : QRegularExpression::escape(sought);
-    if (m_wholeWords->isChecked()) pattern = QStringLiteral("\\b(?:%1)\\b").arg(pattern);
-    QRegularExpression expression(pattern, m_matchCase->isChecked() ? QRegularExpression::NoPatternOption
-                                                                    : QRegularExpression::CaseInsensitiveOption);
-    expression.setPatternOptions(expression.patternOptions() | QRegularExpression::UseUnicodePropertiesOption);
-    if (!expression.isValid()) {
-        m_error = expression.errorString();
-        m_editor->setHighlights({});
-        showCount();
-        return false;
+        return m_error.isEmpty();
     }
     QList<TextRange> highlights;
     QRegularExpressionMatchIterator it = expression.globalMatch(m_text);
@@ -204,7 +255,7 @@ bool FindBarWidget::search() {
         highlights << rangeOf(match.start, match.end);
         m_matches << match;
     }
-    m_editor->setHighlights(highlights);
+    m_target->setHighlights(highlights);
     showCount();
     return true;
 }
@@ -224,9 +275,9 @@ int FindBarWidget::offsetOf(TextPosition position) const {
 }
 
 int FindBarWidget::currentMatch() const {
-    if (!m_editor) return -1;
+    if (!m_target) return -1;
     TextRange range;
-    if (!m_editor->selection(&range)) return -1;
+    if (!m_target->selection(&range)) return -1;
     const int start = offsetOf(range.start);
     const int end = offsetOf(range.end);
     for (int i = 0; i < m_matches.size(); ++i)
@@ -235,7 +286,7 @@ int FindBarWidget::currentMatch() const {
 }
 
 void FindBarWidget::selectFrom(int offset, bool forward) {
-    if (!m_editor || m_matches.isEmpty()) {
+    if (!m_target || m_matches.isEmpty()) {
         showCount();
         return;
     }
@@ -248,25 +299,62 @@ void FindBarWidget::selectFrom(int offset, bool forward) {
             if (m_matches.at(i).start < offset) index = i;
         if (index < 0) index = int(m_matches.size()) - 1;  // around the start
     }
-    m_editor->setSelection(rangeOf(m_matches.at(index).start, m_matches.at(index).end));
+    m_target->setSelection(rangeOf(m_matches.at(index).start, m_matches.at(index).end));
     showCount();
 }
 
 void FindBarWidget::step(bool forward) {
-    if (!m_editor) return;
+    if (!m_target) return;
     if (!isVisible()) {
         open(false);
         return;
     }
+    if (huge()) {
+        if (m_find->text().isEmpty() || !m_error.isEmpty()) return;
+        // Shown before find(), which may finish at once.
+        m_searching = true;
+        m_progress->setValue(0);
+        m_progress->show();
+        m_count->hide();
+        m_target->find(query(), forward);
+        return;
+    }
     if (m_matches.isEmpty() && !search()) return;
     TextRange range;
-    m_editor->selection(&range);
+    m_target->selection(&range);
     // From the selected match on, or from the cursor.
     selectFrom(forward ? offsetOf(range.end) : offsetOf(range.start), forward);
 }
 
+void FindBarWidget::cancelSearch() {
+    if (!m_searching) return;
+    m_searching = false;  // a findFinished() coming later is let go
+    m_target->cancelFind();
+    m_progress->hide();
+    m_count->show();
+}
+
+void FindBarWidget::findProgress(qint64 done, qint64 total) {
+    if (!m_searching || total <= 0) return;
+    m_progress->setValue(int(std::clamp(done, qint64(0), total) * progressSteps / total));
+}
+
+void FindBarWidget::findFinished(FindResult result) {
+    if (!m_searching) return;  // cancelled here, or another target's
+    m_searching = false;
+    m_progress->hide();
+    m_count->show();
+    switch (result) {
+    case FindResult::Found: showStatus({}, false); break;
+    case FindResult::Wrapped: showStatus(tr("Wrapped"), false); break;
+    case FindResult::NotFound: showStatus(tr("No matches"), true); break;
+    case FindResult::Invalid: showStatus(tr("Invalid"), true); break;
+    case FindResult::Cancelled: showStatus(tr("Cancelled"), false); break;
+    }
+}
+
 void FindBarWidget::replaceOne() {
-    if (!m_editor || m_editor->isReadOnly()) return;
+    if (!m_target || huge() || !m_target->canReplace()) return;
     const int index = currentMatch();
     if (index < 0) {  // the selection is no match: the next one first
         step(true);
@@ -274,14 +362,14 @@ void FindBarWidget::replaceOne() {
     }
     const Match match = m_matches.at(index);
     const QString text = m_regex->isChecked() ? expand(m_replacement->text(), match.captures) : m_replacement->text();
-    m_editor->replace({{rangeOf(match.start, match.end), text}}, tr("Replace"));
+    m_target->replace({{rangeOf(match.start, match.end), text}}, tr("Replace"));
     m_researching.stop();
     search();
     selectFrom(match.start + int(text.size()), true);
 }
 
 void FindBarWidget::replaceAll() {
-    if (!m_editor || m_editor->isReadOnly() || m_matches.isEmpty()) return;
+    if (!m_target || huge() || !m_target->canReplace() || m_matches.isEmpty()) return;
     QList<TextReplacement> replacements;
     replacements.reserve(m_matches.size());
     for (const Match& match : std::as_const(m_matches))
@@ -289,34 +377,36 @@ void FindBarWidget::replaceAll() {
                                         m_regex->isChecked() ? expand(m_replacement->text(), match.captures)
                                                              : m_replacement->text()};
     const int count = int(replacements.size());
-    m_editor->replace(replacements, tr("Replace All"));
+    m_target->replace(replacements, tr("Replace All"));
     m_researching.stop();
     search();
     m_count->setText(tr("%n replaced", nullptr, count));
 }
 
-void FindBarWidget::showCount() {
+void FindBarWidget::showStatus(const QString& text, bool bad) {
     QPalette palette = m_find->palette();
-    palette.setColor(QPalette::Text, this->palette().color(QPalette::Text));
+    palette.setColor(QPalette::Text, bad ? QColor(0xc0, 0x10, 0x10) : this->palette().color(QPalette::Text));
+    m_find->setPalette(palette);
+    m_count->setText(text);
+}
+
+void FindBarWidget::showCount() {
     if (!m_error.isEmpty()) {
-        m_count->setText(tr("Invalid"));
+        showStatus(tr("Invalid"), true);
         m_count->setToolTip(m_error);
-        palette.setColor(QPalette::Text, QColor(0xc0, 0x10, 0x10));
-    } else if (m_find->text().isEmpty()) {
-        m_count->clear();
-        m_count->setToolTip({});
+        return;
+    }
+    m_count->setToolTip({});
+    if (m_find->text().isEmpty()) {
+        showStatus({}, false);
     } else if (m_matches.isEmpty()) {
-        m_count->setText(tr("No matches"));
-        m_count->setToolTip({});
-        palette.setColor(QPalette::Text, QColor(0xc0, 0x10, 0x10));
+        showStatus(tr("No matches"), true);
     } else {
         const int index = currentMatch();
         const QString total = m_matches.size() >= maxMatches ? QStringLiteral("%1+").arg(maxMatches)
                                                              : QString::number(m_matches.size());
-        m_count->setText(index >= 0 ? tr("%1 of %2").arg(index + 1).arg(total) : tr("%1 matches").arg(total));
-        m_count->setToolTip({});
+        showStatus(index >= 0 ? tr("%1 of %2").arg(index + 1).arg(total) : tr("%1 matches").arg(total), false);
     }
-    m_find->setPalette(palette);
 }
 
 QString FindBarWidget::expand(const QString& replacement, const QStringList& captures) {
@@ -351,7 +441,12 @@ bool FindBarWidget::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Escape) {
-            close();
+            if (m_searching) {  // the first Escape cancels the search
+                cancelSearch();
+                showStatus(tr("Cancelled"), false);
+            } else {
+                close();
+            }
             return true;
         }
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {

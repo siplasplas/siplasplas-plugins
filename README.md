@@ -144,9 +144,11 @@ An editor is never huge and replaces unless it is read-only. For a target
 that is not huge, the bar seeks in its text itself: it seeks as one types
 and highlights every match, selecting the first from where the search began;
 it says "3 of 17" (or "No matches", or "Invalid" for a wrong regular
-expression). Options: match case (Alt+C), whole words (Alt+W), regular
-expression (Alt+X). Enter and the ↓ button go to the next match, Shift+Enter
-and ↑ to the previous one, around the end; `findNext()` and `findPrevious()`
+expression). Options: wrap around (↩, on by default), match case (Alt+C),
+whole words (Alt+W), regular expression (Alt+X). Enter and the ↓ button go
+to the next match, Shift+Enter and ↑ to the previous one, around the end
+while wrapping around (otherwise the last and the first match stay
+selected; a huge target gets `FindQuery::wrap`); `findNext()` and `findPrevious()`
 do it for the program's keys (F3, Shift+F3). For replacing: Replace replaces
 the selected match and selects the next one (Enter in the replacement does
 it too), Replace All replaces them all as one undo step. In the replacement

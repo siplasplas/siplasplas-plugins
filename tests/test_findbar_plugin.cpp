@@ -94,6 +94,26 @@ TEST(FindBar, CountsAndSelectsMatches)
     EXPECT_EQ(f.count(), QStringLiteral("No matches"));
 }
 
+TEST(FindBar, StopsAtTheEndWithoutWrapping)
+{
+    Fixture f("one one one\n");
+    f.bar.showFind();
+    f.option(QStringLiteral("↩"))->setChecked(false);
+    f.seek(QStringLiteral("one"));
+    f.bar.findNext();
+    f.bar.findNext();
+    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    f.bar.findNext();  // stays at the last one
+    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    f.bar.findPrevious();
+    f.bar.findPrevious();
+    f.bar.findPrevious();  // stays at the first one
+    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));
+    f.option(QStringLiteral("↩"))->setChecked(true);
+    f.bar.findPrevious();  // around the start
+    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+}
+
 TEST(FindBar, Options)
 {
     Fixture f("Two two twofold\n");
@@ -226,6 +246,7 @@ TEST(FindBar, HugeTargetSeeksItselfWithProgress)
     bar.findNext();
     EXPECT_EQ(target.finds, 1);
     EXPECT_TRUE(target.forward);
+    EXPECT_TRUE(target.query.wrap);
     EXPECT_FALSE(progress->isHidden());
     EXPECT_TRUE(label->isHidden());
     target.listener->findProgress(50, 100);
@@ -233,8 +254,11 @@ TEST(FindBar, HugeTargetSeeksItselfWithProgress)
     target.listener->findFinished(spp::FindResult::Wrapped);
     EXPECT_TRUE(progress->isHidden());
     EXPECT_EQ(label->text(), QStringLiteral("Wrapped"));
+    for (auto* button : bar.findChildren<QToolButton*>())
+        if (button->text() == QStringLiteral("↩")) button->setChecked(false);
     bar.findPrevious();
     EXPECT_FALSE(target.forward);
+    EXPECT_FALSE(target.query.wrap);
     target.listener->findFinished(spp::FindResult::NotFound);
     EXPECT_EQ(label->text(), QStringLiteral("No matches"));
 

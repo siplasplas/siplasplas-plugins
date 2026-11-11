@@ -33,6 +33,9 @@ struct FindQuery {
     bool matchCase = false;
     bool wholeWords = false;
     bool regex = false;  // Perl-like, as QRegularExpression
+    // Past the end (start) the search goes on from the start (end);
+    // otherwise it stops there.
+    bool wrap = true;
 };
 
 // How a huge target's search ended.
@@ -100,7 +103,8 @@ public:
     // scrolls; an empty text removes them.
     virtual void setQuery(const FindQuery& query) { (void)query; }
     // Seeks the next (or previous) match after (before) the selected one, or
-    // from the top of what is shown, around the end, and tells the listener
+    // from the top of what is shown, around the end when query.wrap (then a
+    // match from the part after going around is Wrapped), and tells the listener
     // of the progress and of the end: a match found is selected and shown.
     // A search still running is cancelled first.
     virtual void find(const FindQuery& query, bool forward)
@@ -131,7 +135,8 @@ public:
     // text sought, and focuses it.
     virtual void showFind() = 0;
     virtual void showReplace() = 0;
-    // The next or previous match from the cursor, around the end.
+    // The next or previous match from the cursor, around the end when the
+    // bar's "Wrap around" is on (by default).
     virtual void findNext() = 0;
     virtual void findPrevious() = 0;
 

@@ -61,7 +61,8 @@ private:
     // Seeks the matches in the target's text (a huge one is given the query
     // to highlight); false for an invalid pattern.
     bool search();
-    // Selects the match nearest after (or before) `offset`, around the end.
+    // Selects the match nearest after (or before) `offset`, around the end
+    // when wrapping around.
     void selectFrom(int offset, bool forward);
     void step(bool forward);
     // Stops a huge target's search running.
@@ -76,6 +77,7 @@ private:
     int currentMatch() const;
 
     QLineEdit* m_find = nullptr;
+    QToolButton* m_wrap = nullptr;
     QToolButton* m_matchCase = nullptr;
     QToolButton* m_wholeWords = nullptr;
     QToolButton* m_regex = nullptr;

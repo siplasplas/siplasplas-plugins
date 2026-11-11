@@ -37,6 +37,8 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_find = new QLineEdit(this);
     m_find->setPlaceholderText(tr("Find"));
     m_find->setClearButtonEnabled(true);
+    m_wrap = option(QStringLiteral("↩"), tr("Wrap around"), this);
+    m_wrap->setChecked(true);
     m_matchCase = option(QStringLiteral("Aa"), tr("Match case (Alt+C)"), this);
     m_matchCase->setShortcut(QKeySequence(Qt::ALT | Qt::Key_C));
     m_wholeWords = option(QStringLiteral("W"), tr("Whole words (Alt+W)"), this);
@@ -72,6 +74,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     auto* findRow = new QHBoxLayout;
     findRow->setContentsMargins(0, 0, 0, 0);
     findRow->addWidget(m_find, 1);
+    findRow->addWidget(m_wrap);
     findRow->addWidget(m_matchCase);
     findRow->addWidget(m_wholeWords);
     findRow->addWidget(m_regex);
@@ -153,7 +156,8 @@ void FindBarWidget::showReplace() {
 }
 
 FindQuery FindBarWidget::query() const {
-    return {m_find->text(), m_matchCase->isChecked(), m_wholeWords->isChecked(), m_regex->isChecked()};
+    return {m_find->text(), m_matchCase->isChecked(), m_wholeWords->isChecked(), m_regex->isChecked(),
+            m_wrap->isChecked()};
 }
 
 void FindBarWidget::updateReplaceRow() {
@@ -293,11 +297,16 @@ void FindBarWidget::selectFrom(int offset, bool forward) {
     int index = -1;
     if (forward) {
         const auto it = std::find_if(m_matches.cbegin(), m_matches.cend(), [offset](const Match& m) { return m.start >= offset; });
-        index = it == m_matches.cend() ? 0 : int(it - m_matches.cbegin());  // around the end
+        if (it != m_matches.cend()) index = int(it - m_matches.cbegin());
+        else if (m_wrap->isChecked()) index = 0;  // around the end
     } else {
         for (int i = int(m_matches.size()) - 1; i >= 0 && index < 0; --i)
             if (m_matches.at(i).start < offset) index = i;
-        if (index < 0) index = int(m_matches.size()) - 1;  // around the start
+        if (index < 0 && m_wrap->isChecked()) index = int(m_matches.size()) - 1;  // around the start
+    }
+    if (index < 0) {  // the end (start) without wrapping around: the selection stays
+        showCount();
+        return;
     }
     m_target->setSelection(rangeOf(m_matches.at(index).start, m_matches.at(index).end));
     showCount();

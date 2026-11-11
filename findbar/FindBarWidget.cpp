@@ -43,14 +43,14 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_find->setClearButtonEnabled(true);
     m_wrap = option(QStringLiteral("↩"), tr("Wrap around"), this);
     m_wrap->setChecked(true);
-    m_matchCase = option(QStringLiteral("Aa"), tr("Match case (Alt+C)"), this);
+    m_matchCase = option(QStringLiteral("Cc"), tr("Match case (Alt+C)"), this);
     m_matchCase->setShortcut(QKeySequence(Qt::ALT | Qt::Key_C));
     m_wholeWords = option(QStringLiteral("W"), tr("Whole words (Alt+W)"), this);
     m_wholeWords->setShortcut(QKeySequence(Qt::ALT | Qt::Key_W));
     m_regex = option(QStringLiteral(".*"), tr("Regular expression (Alt+X)"), this);
     m_regex->setShortcut(QKeySequence(Qt::ALT | Qt::Key_X));
     m_count = new QLabel(this);
-    m_count->setMinimumWidth(m_count->fontMetrics().horizontalAdvance(QStringLiteral("99999 of 99999")));
+    m_count->setMinimumWidth(m_count->fontMetrics().horizontalAdvance(QStringLiteral("99999/99999")));
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, progressSteps);
     m_progress->setTextVisible(false);
@@ -74,13 +74,19 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     closeButton->setToolTip(tr("Close (Escape)"));
     closeButton->setAutoRaise(true);
 
+    m_expand = option(QStringLiteral("▸"), tr("Show/hide Replace"), this);
     m_replacement = new QLineEdit(this);
-    m_replacement->setPlaceholderText(tr("Replace"));
+    m_replacement->setPlaceholderText(tr("Replace with"));
+    m_replacement->setClearButtonEnabled(true);
+    m_preserveCase = option(QStringLiteral("Aa"), tr("Preserve case"), this);
     m_replaceButton = new QPushButton(tr("Replace"), this);
     m_replaceAllButton = new QPushButton(tr("Replace All"), this);
+    m_excludeButton = new QPushButton(tr("Exclude"), this);
+    m_excludeButton->setToolTip(tr("Leave this match out of Replace All"));
 
     auto* findRow = new QHBoxLayout;
     findRow->setContentsMargins(0, 0, 0, 0);
+    findRow->addWidget(m_expand);
     findRow->addWidget(m_find, 1);
     findRow->addWidget(m_wrap);
     findRow->addWidget(m_matchCase);
@@ -95,9 +101,12 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_replaceRow = new QWidget(this);
     auto* replaceRow = new QHBoxLayout(m_replaceRow);
     replaceRow->setContentsMargins(0, 0, 0, 0);
+    replaceRow->addSpacing(m_expand->sizeHint().width() + findRow->spacing());
     replaceRow->addWidget(m_replacement, 1);
+    replaceRow->addWidget(m_preserveCase);
     replaceRow->addWidget(m_replaceButton);
     replaceRow->addWidget(m_replaceAllButton);
+    replaceRow->addWidget(m_excludeButton);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 2, 4, 2);
     layout->setSpacing(2);
@@ -115,6 +124,11 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     connect(closeButton, &QToolButton::clicked, this, &FindBarWidget::close);
     connect(m_replaceButton, &QPushButton::clicked, this, &FindBarWidget::replaceOne);
     connect(m_replaceAllButton, &QPushButton::clicked, this, &FindBarWidget::replaceAll);
+    connect(m_excludeButton, &QPushButton::clicked, this, &FindBarWidget::excludeCurrent);
+    connect(m_expand, &QToolButton::toggled, this, [this](bool expanded) {
+        m_replacing = expanded;
+        updateReplaceRow();
+    });
     m_find->installEventFilter(this);
     m_replacement->installEventFilter(this);
 
@@ -124,7 +138,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     connect(&m_researching, &QTimer::timeout, this, [this] {
         if (isVisible() && search() && !huge()) showCount();
     });
-    m_replaceRow->hide();
+    updateReplaceRow();  // none without a target
     hide();
 }
 
@@ -148,6 +162,7 @@ void FindBarWidget::setTarget(FindTarget* target) {
     }
     m_target = target;
     m_matches.clear();
+    m_excluded.clear();
     // The selection searched in was the other target's.
     m_scopeAvailable = false;
     {
@@ -182,11 +197,20 @@ FindQuery FindBarWidget::query() const {
 }
 
 void FindBarWidget::updateReplaceRow() {
-    m_replaceRow->setVisible(m_replacing && m_target && m_target->canReplace());
+    // A read-only (or huge) target only searches: no toggle either.
+    const bool can = m_target && m_target->canReplace() && !m_target->isHuge();
+    m_expand->setVisible(can);
+    {
+        const QSignalBlocker blocker(m_expand);
+        m_expand->setChecked(m_replacing && can);
+    }
+    m_expand->setText(m_replacing && can ? QStringLiteral("▾") : QStringLiteral("▸"));
+    m_replaceRow->setVisible(m_replacing && can);
 }
 
 void FindBarWidget::open(bool replacing) {
-    m_replacing = replacing;
+    // Finding keeps the Replace row as it was; replacing shows it.
+    if (replacing) m_replacing = true;
     updateReplaceRow();
     if (m_target) {
         m_scope->setVisible(!huge());
@@ -212,8 +236,13 @@ void FindBarWidget::open(bool replacing) {
         if (!selected.isEmpty()) m_find->setText(selected);
     }
     show();
-    m_find->setFocus();
-    m_find->selectAll();
+    if (replacing && m_replaceRow->isVisible()) {
+        m_replacement->setFocus();
+        m_replacement->selectAll();
+    } else {
+        m_find->setFocus();
+        m_find->selectAll();
+    }
     if (!m_target) return;
     if (huge()) {
         // Seeking a file of gigabytes waits for Enter.
@@ -247,6 +276,7 @@ void FindBarWidget::editorTextChanged() {
 
 void FindBarWidget::queryChanged() {
     if (!m_target) return;
+    m_excluded.clear();
     if (huge()) {
         cancelSearch();
         search();
@@ -286,6 +316,7 @@ bool FindBarWidget::scoped() const {
 
 void FindBarWidget::takeText() {
     const QString text = m_target->text();
+    if (text != m_text) m_excluded.clear();  // their offsets are gone
     if (m_scopeAvailable && text != m_text) {
         // The selection searched in follows the edit: the part that differs
         // between the common start and end.
@@ -327,6 +358,7 @@ bool FindBarWidget::search() {
             (m_matchCase->isChecked() ? QRegularExpression::NoPatternOption : QRegularExpression::CaseInsensitiveOption)
             | QRegularExpression::UseUnicodePropertiesOption);
         if (!expression.isValid()) m_error = expression.errorString();
+        else m_captureNames = expression.namedCaptureGroups();
     }
     if (huge()) {
         // The target seeks itself; it highlights the matches it shows.
@@ -352,6 +384,9 @@ bool FindBarWidget::search() {
         if (found.capturedLength() == 0) continue;  // nothing to select
         if (scoped() && (found.capturedStart() < m_scopeStart || found.capturedEnd() > m_scopeEnd)) continue;
         Match match{int(found.capturedStart()), int(found.capturedEnd()), found.capturedTexts()};
+        if (std::any_of(m_excluded.cbegin(), m_excluded.cend(),
+                        [&match](const Match& m) { return m.start == match.start && m.end == match.end; }))
+            continue;
         highlights << rangeOf(match.start, match.end);
         m_matches << match;
     }
@@ -466,7 +501,7 @@ void FindBarWidget::replaceOne() {
         return;
     }
     const Match match = m_matches.at(index);
-    const QString text = m_regex->isChecked() ? expand(m_replacement->text(), match.captures) : m_replacement->text();
+    const QString text = replacementFor(match);
     m_target->replace({{rangeOf(match.start, match.end), text}}, tr("Replace"));
     m_researching.stop();
     search();
@@ -475,17 +510,57 @@ void FindBarWidget::replaceOne() {
 
 void FindBarWidget::replaceAll() {
     if (!m_target || huge() || !m_target->canReplace() || m_matches.isEmpty()) return;
+    // A replacement without groups or case to follow is the same for every
+    // match: made once.
+    const bool same = !m_preserveCase->isChecked()
+                      && !(m_regex->isChecked() && m_replacement->text().contains(QRegularExpression(QStringLiteral(R"([\\$])"))));
+    const QString fixed = same ? replacementFor(m_matches.front()) : QString();
     QList<TextReplacement> replacements;
     replacements.reserve(m_matches.size());
     for (const Match& match : std::as_const(m_matches))
-        replacements << TextReplacement{rangeOf(match.start, match.end),
-                                        m_regex->isChecked() ? expand(m_replacement->text(), match.captures)
-                                                             : m_replacement->text()};
+        replacements << TextReplacement{rangeOf(match.start, match.end), same ? fixed : replacementFor(match)};
     const int count = int(replacements.size());
     m_target->replace(replacements, tr("Replace All"));
     m_researching.stop();
     search();
     m_count->setText(tr("%n replaced", nullptr, count));
+}
+
+void FindBarWidget::excludeCurrent() {
+    const int index = currentMatch();
+    if (index < 0) return;
+    m_excluded << m_matches.takeAt(index);
+    QList<TextRange> highlights;
+    highlights.reserve(m_matches.size());
+    for (const Match& match : std::as_const(m_matches)) highlights << rangeOf(match.start, match.end);
+    m_target->setHighlights(highlights);
+    if (m_matches.isEmpty()) {
+        showCount();
+        return;
+    }
+    // The match that came next, or the last one.
+    const Match& next = m_matches.at(std::min(index, int(m_matches.size()) - 1));
+    m_target->setSelection(rangeOf(next.start, next.end));
+    showCount();
+}
+
+QString FindBarWidget::replacementFor(const Match& match) const {
+    QString replacement =
+        m_regex->isChecked() ? expand(m_replacement->text(), match.captures, m_captureNames) : m_replacement->text();
+    if (m_preserveCase->isChecked()) replacement = followCase(replacement, match.captures.value(0));
+    return replacement;
+}
+
+QString FindBarWidget::followCase(const QString& replacement, const QString& original) {
+    if (original.toUpper() == original.toLower()) return replacement;  // no letters with case
+    if (original == original.toUpper()) return replacement.toUpper();
+    if (original == original.toLower()) return replacement.toLower();
+    if (original.at(0).isUpper() && original.mid(1) == original.mid(1).toLower()) {
+        QString result = replacement.toLower();
+        if (!result.isEmpty()) result[0] = result.at(0).toUpper();
+        return result;
+    }
+    return replacement;  // mixed: as typed
 }
 
 void FindBarWidget::showStatus(const QString& text, bool bad) {
@@ -510,34 +585,50 @@ void FindBarWidget::showCount() {
         const int index = currentMatch();
         const QString total = m_matches.size() >= maxMatches ? QStringLiteral("%1+").arg(maxMatches)
                                                              : QString::number(m_matches.size());
-        showStatus(index >= 0 ? tr("%1 of %2").arg(index + 1).arg(total) : tr("%1 matches").arg(total), false);
+        showStatus(tr("%1/%2").arg(index + 1).arg(total), false);  // 0 without a match selected
     }
 }
 
-QString FindBarWidget::expand(const QString& replacement, const QStringList& captures) {
+QString FindBarWidget::expand(const QString& replacement, const QStringList& captures, const QStringList& names) {
     QString result;
     for (int i = 0; i < replacement.size(); ++i) {
         const QChar c = replacement.at(i);
         const QChar next = i + 1 < replacement.size() ? replacement.at(i + 1) : QChar();
         if ((c == QLatin1Char('$') || c == QLatin1Char('\\')) && next.isDigit()) {
-            const int group = next.digitValue();
-            if (group < captures.size()) result += captures.at(group);
-            ++i;
+            // All the digits; a group that does not exist stays as written.
+            int end = i + 1;
+            while (end < replacement.size() && replacement.at(end).isDigit()) ++end;
+            const int group = replacement.mid(i + 1, end - i - 1).toInt();
+            if (group < captures.size()) {
+                result += captures.at(group);
+                i = end - 1;
+                continue;
+            }
+        } else if (c == QLatin1Char('$') && next == QLatin1Char('{')) {
+            const int end = replacement.indexOf(QLatin1Char('}'), i + 2);
+            const int group = end < 0 ? -1 : int(names.indexOf(replacement.mid(i + 2, end - i - 2)));
+            if (group > 0 && group < captures.size()) {
+                result += captures.at(group);
+                i = end;
+                continue;
+            }
         } else if (c == QLatin1Char('$') && next == QLatin1Char('$')) {
             result += QLatin1Char('$');
             ++i;
-        } else if (c == QLatin1Char('\\') && next == QLatin1Char('n')) {
-            result += QLatin1Char('\n');
-            ++i;
-        } else if (c == QLatin1Char('\\') && next == QLatin1Char('t')) {
-            result += QLatin1Char('\t');
-            ++i;
-        } else if (c == QLatin1Char('\\') && next == QLatin1Char('\\')) {
-            result += QLatin1Char('\\');
-            ++i;
-        } else {
-            result += c;
+            continue;
+        } else if (c == QLatin1Char('\\')) {
+            const QChar escaped = next == QLatin1Char('n')    ? QLatin1Char('\n')
+                                  : next == QLatin1Char('t')  ? QLatin1Char('\t')
+                                  : next == QLatin1Char('r')  ? QLatin1Char('\r')
+                                  : next == QLatin1Char('\\') ? QLatin1Char('\\')
+                                                              : QChar();
+            if (!escaped.isNull()) {
+                result += escaped;
+                ++i;
+                continue;
+            }
         }
+        result += c;
     }
     return result;
 }

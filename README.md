@@ -138,22 +138,30 @@ A target has two traits of its own:
   for the next or previous match (`find()`), which it seeks in the
   background, the bar showing the progress instead of a count; Escape
   cancels the search (a second one closes the bar). The bar then says
-  "Wrapped", "No matches" or "Cancelled", never "3 of 17".
+  "Wrapped", "No matches" or "Cancelled", never "3/17".
 
 An editor is never huge and replaces unless it is read-only. For a target
 that is not huge, the bar seeks in its text itself: it seeks as one types
 and highlights every match, selecting the first from where the search began;
-it says "3 of 17" (or "No matches", or "Invalid" for a wrong regular
-expression). Options: wrap around (↩, on by default), match case (Alt+C),
+it says "3/17" ("0/17" with no match selected, "No matches", or "Invalid"
+for a wrong regular expression). Options: wrap around (↩, on by default),
+match case (Cc, Alt+C),
 whole words (Alt+W), regular expression (Alt+X). Enter and the ↓ button go
 to the next match, Shift+Enter and ↑ to the previous one, around the end
 while wrapping around (otherwise the last and the first match stay
 selected; a huge target gets `FindQuery::wrap`); `findNext()` and `findPrevious()`
-do it for the program's keys (F3, Shift+F3). For replacing: Replace replaces
-the selected match and selects the next one (Enter in the replacement does
-it too), Replace All replaces them all as one undo step. In the replacement
-of a regular expression `$1` or `\1` is its group (`$0` the whole match),
-`\n` a line break, `\t` a tab, `\\` and `$$` themselves. Escape closes the bar
+do it for the program's keys (F3, Shift+F3). The ▸ button at the left shows
+or hides the Replace row (`showReplace()` shows it and focuses the
+replacement; `showFind()` leaves it as it was; a read-only target has
+neither). For replacing: Replace replaces the selected match and selects the
+next one (Enter in the replacement does it too), Replace All replaces them
+all as one undo step, Exclude leaves the selected match out of Replace All
+until the text sought, an option or the text changes. Preserve case (Aa):
+the replacement follows the case of what it replaces — all capitals, all
+small, or a capital first. In the replacement of a regular expression `$1`
+or `\1` is its group (`$0` the whole match, `$12` the twelfth; a group that
+does not exist stays as written), `${name}` a named group, `\n` a line
+break, `\t` a tab, `\r` a carriage return, `\\` and `$$` themselves. Escape closes the bar
 and returns to the editor. The program tells the bar of edits
 (`editorTextChanged()`), after which the matches are sought again.
 

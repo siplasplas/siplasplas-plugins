@@ -36,8 +36,14 @@ public:
     void editorTextChanged() override;
 
     // The replacement of a regular expression's match: $1 or \1 its groups
-    // ($0 the whole match), \n a line break, \t a tab, \\ and $$ themselves.
-    static QString expand(const QString& replacement, const QStringList& captures);
+    // ($0 the whole match, all the digits read; one that does not exist
+    // stays as written), ${name} a named group (`names` as
+    // QRegularExpression::namedCaptureGroups()), \n a line break, \t a tab,
+    // \r a carriage return, \\ and $$ themselves.
+    static QString expand(const QString& replacement, const QStringList& captures, const QStringList& names = {});
+    // The replacement in the case of the text replaced: all capitals, all
+    // small, or a capital first; otherwise as written.
+    static QString followCase(const QString& replacement, const QString& original);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -76,6 +82,9 @@ private:
     void cancelSearch();
     void replaceOne();
     void replaceAll();
+    // Leaves the selected match out of Replace All, selecting the next one.
+    void excludeCurrent();
+    QString replacementFor(const Match& match) const;
     void showCount();
     void showStatus(const QString& text, bool bad);
     void updateReplaceRow();
@@ -91,17 +100,22 @@ private:
     QToolButton* m_scope = nullptr;
     QLabel* m_count = nullptr;
     QProgressBar* m_progress = nullptr;
+    QToolButton* m_expand = nullptr;
     QWidget* m_replaceRow = nullptr;
+    QToolButton* m_preserveCase = nullptr;
+    QPushButton* m_excludeButton = nullptr;
     QLineEdit* m_replacement = nullptr;
     QPushButton* m_replaceButton = nullptr;
     QPushButton* m_replaceAllButton = nullptr;
 
     FindTarget* m_target = nullptr;
-    bool m_replacing = false;  // shown for replacing, where the target can
+    bool m_replacing = false;  // the Replace row is open, where the target can replace
     bool m_searching = false;  // a huge target's find() runs
     QString m_text;            // the target's text searched
     QList<int> m_lineStarts;   // offsets of its lines
     QList<Match> m_matches;
+    QList<Match> m_excluded;   // left out of the matches until the query or the text changes
+    QStringList m_captureNames;
     QString m_error;           // of an invalid pattern
     bool m_scopeAvailable = false;  // a selection captured to search in
     int m_scopeStart = 0;           // its offsets in m_text

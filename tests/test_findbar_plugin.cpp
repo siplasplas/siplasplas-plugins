@@ -81,15 +81,15 @@ TEST(FindBar, CountsAndSelectsMatches)
     Fixture f("one Two one\nthree one two\n");
     f.bar.showFind();
     f.seek(QStringLiteral("one"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/3"));
     EXPECT_EQ(f.selected(), QStringLiteral("one"));
     f.bar.findNext();
-    EXPECT_EQ(f.count(), QStringLiteral("2 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("2/3"));
     f.bar.findNext();
     f.bar.findNext();  // around the end
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/3"));
     f.bar.findPrevious();  // around the start
-    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("3/3"));
     f.seek(QStringLiteral("missing"));
     EXPECT_EQ(f.count(), QStringLiteral("No matches"));
 }
@@ -102,16 +102,16 @@ TEST(FindBar, StopsAtTheEndWithoutWrapping)
     f.seek(QStringLiteral("one"));
     f.bar.findNext();
     f.bar.findNext();
-    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("3/3"));
     f.bar.findNext();  // stays at the last one
-    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("3/3"));
     f.bar.findPrevious();
     f.bar.findPrevious();
     f.bar.findPrevious();  // stays at the first one
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/3"));
     f.option(QStringLiteral("↩"))->setChecked(true);
     f.bar.findPrevious();  // around the start
-    EXPECT_EQ(f.count(), QStringLiteral("3 of 3"));
+    EXPECT_EQ(f.count(), QStringLiteral("3/3"));
 }
 
 TEST(FindBar, SearchesInASelectionOfSeveralLines)
@@ -122,7 +122,7 @@ TEST(FindBar, SearchesInASelectionOfSeveralLines)
     EXPECT_TRUE(f.option(QStringLiteral("▽"))->isChecked());
     EXPECT_TRUE(f.bar.findChildren<QLineEdit*>().first()->text().isEmpty());  // not sought
     f.seek(QStringLiteral("x"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/4"));
     f.bar.findChildren<QLineEdit*>().at(1)->setText(QStringLiteral("y"));
     for (auto* button : f.bar.findChildren<QPushButton*>())
         if (button->text() == QStringLiteral("Replace All")) button->click();
@@ -131,12 +131,12 @@ TEST(FindBar, SearchesInASelectionOfSeveralLines)
     // The selection follows an edit before it.
     f.view->replace({spp::TextReplacement{{{0, 0}, {0, 0}}, QStringLiteral("x x\n")}}, QStringLiteral("Insert"));
     f.seek(QStringLiteral("y"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/4"));
     f.seek(QStringLiteral("x"));
     EXPECT_EQ(f.count(), QStringLiteral("No matches"));
     // Off: the whole text.
     f.option(QStringLiteral("▽"))->setChecked(false);
-    EXPECT_TRUE(f.count().endsWith(QStringLiteral("of 4")));
+    EXPECT_TRUE(f.count().endsWith(QStringLiteral("/4")));
 }
 
 TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
@@ -146,7 +146,7 @@ TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
         f.view->setSelection({{0, 0}, {0, 5}});
         f.bar.showFind();
         EXPECT_FALSE(f.option(QStringLiteral("▽"))->isChecked());
-        EXPECT_EQ(f.count(), QStringLiteral("1 of 2"));
+        EXPECT_EQ(f.count(), QStringLiteral("1/2"));
     }
     {
         const QByteArray line = QByteArray(70, 'a') + " end a\n";
@@ -155,7 +155,7 @@ TEST(FindBar, ShortSelectionIsSoughtLongOneSearchedIn)
         f.bar.showFind();
         EXPECT_TRUE(f.option(QStringLiteral("▽"))->isChecked());
         f.seek(QStringLiteral("a"));
-        EXPECT_EQ(f.count(), QStringLiteral("1 of 70"));
+        EXPECT_EQ(f.count(), QStringLiteral("1/70"));
     }
 }
 
@@ -164,7 +164,7 @@ TEST(FindBar, SearchInSelectionByHand)
     Fixture f("a a\na a\n");
     f.bar.showFind();
     f.seek(QStringLiteral("a"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 4"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/4"));
     // Without a selection it stays off. (The match is selected now: clear it.)
     f.view->setCursorPosition({1, 3});
     QToolButton* scope = f.option(QStringLiteral("▽"));
@@ -174,7 +174,7 @@ TEST(FindBar, SearchInSelectionByHand)
     f.view->setSelection({{1, 0}, {1, 3}});
     scope->setChecked(true);
     EXPECT_TRUE(scope->isChecked());
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 2"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/2"));
 }
 
 TEST(FindBar, Options)
@@ -182,12 +182,12 @@ TEST(FindBar, Options)
     Fixture f("Two two twofold\n");
     f.bar.showFind();
     f.seek(QStringLiteral("two"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));
-    f.option(QStringLiteral("Aa"))->setChecked(true);
-    EXPECT_TRUE(f.count().endsWith(QStringLiteral("of 2")));
+    EXPECT_EQ(f.count(), QStringLiteral("1/3"));
+    f.option(QStringLiteral("Cc"))->setChecked(true);
+    EXPECT_TRUE(f.count().endsWith(QStringLiteral("/2")));
     f.option(QStringLiteral("W"))->setChecked(true);
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 1"));
-    f.option(QStringLiteral("Aa"))->setChecked(false);
+    EXPECT_EQ(f.count(), QStringLiteral("1/1"));
+    f.option(QStringLiteral("Cc"))->setChecked(false);
     f.option(QStringLiteral("W"))->setChecked(false);
     f.option(QStringLiteral(".*"))->setChecked(true);
     f.seek(QStringLiteral("t\\w+d"));
@@ -205,8 +205,10 @@ TEST(FindBar, ReplacesOneAndAll)
     f.bar.findChildren<QLineEdit*>().at(1)->setText(QStringLiteral("$2=$1"));
     QPushButton* replace = nullptr;
     QPushButton* replaceAll = nullptr;
-    for (auto* button : f.bar.findChildren<QPushButton*>())
-        (button->text() == QStringLiteral("Replace") ? replace : replaceAll) = button;
+    for (auto* button : f.bar.findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Replace")) replace = button;
+        if (button->text() == QStringLiteral("Replace All")) replaceAll = button;
+    }
     ASSERT_TRUE(replace && replaceAll);
     replace->click();
     EXPECT_EQ(f.view->text(), QStringLiteral("1=a; b=2; c=3;"));
@@ -243,7 +245,7 @@ TEST(FindBar, NoReplacingInAReadOnlyEditor)
     ASSERT_NE(replaceAll, nullptr);
     EXPECT_TRUE(replaceAll->parentWidget()->isHidden());
     f.seek(QStringLiteral("a"));
-    EXPECT_EQ(f.count(), QStringLiteral("1 of 3"));  // finding still works
+    EXPECT_EQ(f.count(), QStringLiteral("1/3"));  // finding still works
     replaceAll->click();
     EXPECT_EQ(f.view->text(), QStringLiteral("a a a"));
     // Writable again: the next showReplace() has the row.
@@ -354,13 +356,72 @@ TEST(FindBar, HugeTargetSeeksItselfWithProgress)
     EXPECT_EQ(target.listener, nullptr);
 }
 
+TEST(FindBar, PreservesCaseAndExcludes)
+{
+    Fixture f("cat Cat CAT cAt cat\n");
+    f.bar.showReplace();
+    f.seek(QStringLiteral("cat"));
+    f.bar.findChildren<QLineEdit*>().at(1)->setText(QStringLiteral("dog"));
+    QPushButton* replaceAll = nullptr;
+    QPushButton* exclude = nullptr;
+    for (auto* button : f.bar.findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Replace All")) replaceAll = button;
+        if (button->text() == QStringLiteral("Exclude")) exclude = button;
+    }
+    ASSERT_TRUE(replaceAll && exclude);
+    f.option(QStringLiteral("Aa"))->setChecked(true);  // preserve case
+    // The last "cat" is left out; the next one after it would be none: the
+    // last match left is selected.
+    f.bar.findPrevious();
+    EXPECT_EQ(f.count(), QStringLiteral("5/5"));
+    exclude->click();
+    EXPECT_EQ(f.count(), QStringLiteral("4/4"));
+    replaceAll->click();
+    EXPECT_EQ(f.view->text(), QStringLiteral("dog Dog DOG dog cat"));
+    // A new query forgets what was left out.
+    f.seek(QStringLiteral("cat"));
+    EXPECT_EQ(f.count(), QStringLiteral("1/1"));
+}
+
+TEST(FindBar, ReplaceRowToggle)
+{
+    Fixture f("a\n");
+    QToolButton* toggle = f.option(QStringLiteral("▸"));
+    ASSERT_NE(toggle, nullptr);
+    QWidget* row = f.bar.findChildren<QLineEdit*>().at(1)->parentWidget();
+    f.bar.showFind();
+    EXPECT_TRUE(row->isHidden());
+    toggle->setChecked(true);
+    EXPECT_FALSE(row->isHidden());
+    EXPECT_EQ(toggle->text(), QStringLiteral("▾"));
+    f.bar.showFind();  // finding keeps it open
+    EXPECT_FALSE(row->isHidden());
+    toggle->setChecked(false);
+    EXPECT_TRUE(row->isHidden());
+    f.bar.showReplace();
+    EXPECT_FALSE(row->isHidden());
+    EXPECT_TRUE(toggle->isChecked());
+    // A read-only editor has neither the row nor the toggle.
+    f.view->setReadOnly(true);
+    f.bar.showReplace();
+    EXPECT_TRUE(row->isHidden());
+    EXPECT_TRUE(toggle->isHidden());
+}
+
 TEST(FindBar, ExpandsReplacements)
 {
     const QStringList captures{QStringLiteral("a=1"), QStringLiteral("a"), QStringLiteral("1")};
     EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("$2=$1"), captures), QStringLiteral("1=a"));
     EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("\\1-\\0"), captures), QStringLiteral("a-a=1"));
     EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("$$ \\\\ \\n\\t"), captures), QStringLiteral("$ \\ \n\t"));
-    EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("$9"), captures), QString());
+    // A group that does not exist stays as written; all the digits are read.
+    EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("$9"), captures), QStringLiteral("$9"));
+    const QStringList many{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "twelve"};
+    EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("$12|\\1"), many), QStringLiteral("twelve|1"));
+    // Named groups and \r.
+    const QStringList names{QString(), QStringLiteral("key"), QStringLiteral("value")};
+    EXPECT_EQ(spp::FindBarWidget::expand(QStringLiteral("${value}=${key}${none}\\r"), captures, names),
+              QStringLiteral("1=a${none}\r"));
 }
 
 TEST(FindBar, PluginLoads)

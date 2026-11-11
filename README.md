@@ -128,6 +128,20 @@ works on (the current tab's), `setEditor()` the same for an `EditorView`
 (`EditorView::findTarget()`). `showFind()` and `showReplace()` show it with
 the target's selection, within a line, as the text sought.
 
+`setPlacement()` chooses where the bar is:
+
+- `FindBarPlacement::Bottom` (the default): the program puts the bar's
+  widget below the editors, as any widget; the text never moves.
+- `FindBarPlacement::Top`, as in qceditor: the program puts the bar's widget
+  just above the editors. The bar covers the first rows shown, beside the
+  scroll bar; a match that would be under it is scrolled below it, and a
+  match among the first rows of the text (which cannot scroll further)
+  moves the text down, the bar's widget taking the room above it. A target
+  without rows (`FindTarget::rowHeight()` 0, e.g. a huge one) is always
+  moved down. The target tells its rows through `rowHeight()`,
+  `coverableRect()`, `textTop()`, `firstVisibleRow()`,
+  `setFirstVisibleRow()` and `rowOf()`; the editor does.
+
 A target has two traits of its own:
 
 - `canReplace()`: false for a read-only target (a read-only editor, a

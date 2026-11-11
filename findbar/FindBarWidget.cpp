@@ -38,30 +38,34 @@ QToolButton* option(const QString& text, const QString& tip, QWidget* parent) {
 } // namespace
 
 FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
-    m_find = new QLineEdit(this);
+    // The controls are on a panel: in this widget, or over the top of the
+    // target (FindBarPlacement::Top), this widget then only taking room.
+    m_panel = new QWidget(this);
+    QWidget* panel = m_panel;
+    m_find = new QLineEdit(panel);
     m_find->setPlaceholderText(tr("Find"));
     m_find->setClearButtonEnabled(true);
-    m_wrap = option(QStringLiteral("↩"), tr("Wrap around"), this);
+    m_wrap = option(QStringLiteral("↩"), tr("Wrap around"), panel);
     m_wrap->setChecked(true);
-    m_matchCase = option(QStringLiteral("Cc"), tr("Match case (Alt+C)"), this);
+    m_matchCase = option(QStringLiteral("Cc"), tr("Match case (Alt+C)"), panel);
     m_matchCase->setShortcut(QKeySequence(Qt::ALT | Qt::Key_C));
-    m_wholeWords = option(QStringLiteral("W"), tr("Whole words (Alt+W)"), this);
+    m_wholeWords = option(QStringLiteral("W"), tr("Whole words (Alt+W)"), panel);
     m_wholeWords->setShortcut(QKeySequence(Qt::ALT | Qt::Key_W));
-    m_regex = option(QStringLiteral(".*"), tr("Regular expression (Alt+X)"), this);
+    m_regex = option(QStringLiteral(".*"), tr("Regular expression (Alt+X)"), panel);
     m_regex->setShortcut(QKeySequence(Qt::ALT | Qt::Key_X));
-    m_count = new QLabel(this);
+    m_count = new QLabel(panel);
     m_count->setMinimumWidth(m_count->fontMetrics().horizontalAdvance(QStringLiteral("99999/99999")));
-    m_progress = new QProgressBar(this);
+    m_progress = new QProgressBar(panel);
     m_progress->setRange(0, progressSteps);
     m_progress->setTextVisible(false);
     m_progress->setMaximumWidth(m_count->minimumWidth());
     m_progress->setToolTip(tr("Searching (Escape cancels)"));
     m_progress->hide();
-    auto* previous = new QToolButton(this);
+    auto* previous = new QToolButton(panel);
     previous->setText(QStringLiteral("↑"));
     previous->setToolTip(tr("Previous match (Shift+Enter, Shift+F3)"));
     previous->setAutoRaise(true);
-    auto* next = new QToolButton(this);
+    auto* next = new QToolButton(panel);
     next->setText(QStringLiteral("↓"));
     next->setToolTip(tr("Next match (Enter, F3)"));
     next->setAutoRaise(true);
@@ -69,19 +73,19 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
                      tr("Search in selection (set by itself when the bar opens with several lines or a long "
                         "text selected)"),
                      this);
-    auto* closeButton = new QToolButton(this);
+    auto* closeButton = new QToolButton(panel);
     closeButton->setText(QStringLiteral("×"));
     closeButton->setToolTip(tr("Close (Escape)"));
     closeButton->setAutoRaise(true);
 
-    m_expand = option(QStringLiteral("▸"), tr("Show/hide Replace"), this);
-    m_replacement = new QLineEdit(this);
+    m_expand = option(QStringLiteral("▸"), tr("Show/hide Replace"), panel);
+    m_replacement = new QLineEdit(panel);
     m_replacement->setPlaceholderText(tr("Replace with"));
     m_replacement->setClearButtonEnabled(true);
-    m_preserveCase = option(QStringLiteral("Aa"), tr("Preserve case"), this);
-    m_replaceButton = new QPushButton(tr("Replace"), this);
-    m_replaceAllButton = new QPushButton(tr("Replace All"), this);
-    m_excludeButton = new QPushButton(tr("Exclude"), this);
+    m_preserveCase = option(QStringLiteral("Aa"), tr("Preserve case"), panel);
+    m_replaceButton = new QPushButton(tr("Replace"), panel);
+    m_replaceAllButton = new QPushButton(tr("Replace All"), panel);
+    m_excludeButton = new QPushButton(tr("Exclude"), panel);
     m_excludeButton->setToolTip(tr("Leave this match out of Replace All"));
 
     auto* findRow = new QHBoxLayout;
@@ -98,7 +102,7 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     findRow->addWidget(next);
     findRow->addWidget(m_scope);
     findRow->addWidget(closeButton);
-    m_replaceRow = new QWidget(this);
+    m_replaceRow = new QWidget(panel);
     auto* replaceRow = new QHBoxLayout(m_replaceRow);
     replaceRow->setContentsMargins(0, 0, 0, 0);
     replaceRow->addSpacing(m_expand->sizeHint().width() + findRow->spacing());
@@ -107,11 +111,14 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     replaceRow->addWidget(m_replaceButton);
     replaceRow->addWidget(m_replaceAllButton);
     replaceRow->addWidget(m_excludeButton);
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(panel);
     layout->setContentsMargins(4, 2, 4, 2);
     layout->setSpacing(2);
     layout->addLayout(findRow);
     layout->addWidget(m_replaceRow);
+    m_slotLayout = new QVBoxLayout(this);
+    m_slotLayout->setContentsMargins(0, 0, 0, 0);
+    m_slotLayout->addWidget(m_panel);
 
     // Typing seeks at once, from where the search began (a huge target
     // highlights what it shows; Enter seeks).
@@ -136,14 +143,21 @@ FindBarWidget::FindBarWidget(QWidget* parent) : QWidget(parent) {
     m_researching.setSingleShot(true);
     m_researching.setInterval(200);
     connect(&m_researching, &QTimer::timeout, this, [this] {
-        if (isVisible() && search() && !huge()) showCount();
+        if (m_open && search() && !huge()) showCount();
     });
     updateReplaceRow();  // none without a target
-    hide();
+    setVisible(false);
 }
 
 FindBarWidget::~FindBarWidget() {
-    setTarget(nullptr);
+    // Without touching the controls: on top, the panel is the parent's
+    // child and may be gone already.
+    if (m_target) {
+        if (m_searching) m_target->cancelFind();
+        m_target->setFindListener(nullptr);
+        if (QWidget* widget = m_target->widget()) widget->removeEventFilter(this);
+    }
+    if (m_panel && m_panel->parent() != this) delete m_panel.data();
 }
 
 void FindBarWidget::setTarget(FindTarget* target) {
@@ -151,7 +165,8 @@ void FindBarWidget::setTarget(FindTarget* target) {
     if (m_target) {
         cancelSearch();
         m_target->setFindListener(nullptr);
-        if (isVisible()) {
+        m_target->widget()->removeEventFilter(this);
+        if (m_open) {
             if (huge()) {
                 m_target->setQuery({});
             } else {
@@ -170,13 +185,116 @@ void FindBarWidget::setTarget(FindTarget* target) {
         m_scope->setChecked(false);
     }
     m_scope->setVisible(m_target && !m_target->isHuge());
-    setEnabled(m_target != nullptr);
-    if (m_target) m_target->setFindListener(this);
+    m_panel->setEnabled(m_target != nullptr);
+    if (m_target) {
+        m_target->setFindListener(this);
+        // Its size and place for a bar on top.
+        m_target->widget()->installEventFilter(this);
+    }
     updateReplaceRow();
-    if (m_target && isVisible()) {
+    place();
+    if (m_target && m_open) {
         search();
         if (!huge()) showCount();
     }
+}
+
+void FindBarWidget::setPlacement(FindBarPlacement placement) {
+    if (placement == m_placement) return;
+    m_placement = placement;
+    m_covering = false;
+    place();
+}
+
+void FindBarWidget::setOpen(bool open) {
+    m_open = open;
+    if (open && m_target && m_target->rowHeight() > 0) {
+        // Until a match says otherwise: moving the text down at its top,
+        // covering below it.
+        m_covering = m_target->firstVisibleRow() > 0;
+    }
+    if (!open) {
+        setVisible(false);
+        if (m_panel->parent() != this) m_panel->hide();
+        return;
+    }
+    place();
+}
+
+bool FindBarWidget::overlay() const {
+    QWidget* host = parentWidget();
+    return m_placement == FindBarPlacement::Top && host && m_target && host->isAncestorOf(m_target->widget());
+}
+
+void FindBarWidget::place() {
+    if (m_placing) return;
+    if (!overlay()) {
+        // In this widget, as any other in the layout.
+        if (m_panel->parent() != this) {
+            m_panel->setParent(this);
+            m_slotLayout->addWidget(m_panel);
+            m_panel->show();
+        }
+        setMinimumHeight(0);
+        setMaximumHeight(QWIDGETSIZE_MAX);
+        setVisible(m_open);
+        return;
+    }
+    QWidget* host = parentWidget();
+    if (m_panel->parent() != host) {
+        m_slotLayout->removeWidget(m_panel);
+        m_panel->setParent(host);
+    }
+    if (!m_open) {
+        setVisible(false);
+        m_panel->hide();
+        return;
+    }
+    m_placing = true;
+    const int height = m_panel->sizeHint().height();
+    setFixedHeight(height);
+    const bool covering = m_covering && m_target->rowHeight() > 0;
+    setVisible(!covering);  // the room above the text when moving it down
+    if (host->layout()) host->layout()->activate();
+    QWidget* target = m_target->widget();
+    QRect rect(target->mapTo(host, QPoint()), target->size());
+    if (covering) {
+        const QRect coverable = m_target->coverableRect();
+        if (!coverable.isEmpty()) rect = QRect(target->mapTo(host, coverable.topLeft()), coverable.size());
+        rect.setHeight(height);
+    } else {
+        rect = QRect(rect.left(), geometry().top(), rect.width(), height);
+    }
+    m_panel->setGeometry(rect);
+    m_panel->show();
+    m_panel->raise();
+    m_placing = false;
+}
+
+void FindBarWidget::setCovering(bool covering) {
+    if (covering == m_covering) return;
+    m_covering = covering;
+    place();
+}
+
+void FindBarWidget::revealSelection() {
+    if (!m_open || !overlay() || huge() || m_target->rowHeight() <= 0) return;
+    TextRange range;
+    m_target->selection(&range);
+    // The bar covers the top of the target unless the row is among the first
+    // rows of the text: then it moves them down.
+    const int row = m_target->rowOf(range.start);
+    const int rowHeight = m_target->rowHeight();
+    const int covered = std::max(0, (m_panel->sizeHint().height() - m_target->textTop() + rowHeight - 1) / rowHeight);
+    const int first = m_target->firstVisibleRow();
+    bool covering = true;
+    if (row >= first && row - first < covered) {
+        covering = row >= covered;
+        m_placing = true;
+        m_target->setFirstVisibleRow(covering ? row - covered : 0);
+        m_placing = false;
+    }
+    setCovering(covering);
 }
 
 void FindBarWidget::setEditor(EditorView* editor) {
@@ -206,6 +324,7 @@ void FindBarWidget::updateReplaceRow() {
     }
     m_expand->setText(m_replacing && can ? QStringLiteral("▾") : QStringLiteral("▸"));
     m_replaceRow->setVisible(m_replacing && can);
+    place();  // on top, the bar's height changed
 }
 
 void FindBarWidget::open(bool replacing) {
@@ -219,8 +338,8 @@ void FindBarWidget::open(bool replacing) {
         // selected. A short one in a line is what is sought, unless it is
         // the match selected (maybe found by a pattern).
         bool scoped = false;
-        const bool selectedMatch = isVisible() && currentMatch() >= 0;
-        if (!huge() && isHidden()) {
+        const bool selectedMatch = m_open && currentMatch() >= 0;
+        if (!huge() && !m_open) {
             takeText();
             TextRange range;
             m_scopeAvailable = m_target->selection(&range);
@@ -235,8 +354,8 @@ void FindBarWidget::open(bool replacing) {
         const QString selected = scoped || selectedMatch ? QString() : m_target->selectedText();
         if (!selected.isEmpty()) m_find->setText(selected);
     }
-    show();
-    if (replacing && m_replaceRow->isVisible()) {
+    setOpen(true);
+    if (replacing && !m_replaceRow->isHidden()) {
         m_replacement->setFocus();
         m_replacement->selectAll();
     } else {
@@ -254,10 +373,11 @@ void FindBarWidget::open(bool replacing) {
         m_target->selection(&range);
         selectFrom(offsetOf(range.start), true);
     }
+    revealSelection();
 }
 
 void FindBarWidget::close() {
-    hide();
+    setOpen(false);
     m_researching.stop();
     if (!m_target) return;
     if (huge()) {
@@ -271,7 +391,7 @@ void FindBarWidget::close() {
 }
 
 void FindBarWidget::editorTextChanged() {
-    if (isVisible()) m_researching.start();
+    if (m_open) m_researching.start();
 }
 
 void FindBarWidget::queryChanged() {
@@ -440,12 +560,13 @@ void FindBarWidget::selectFrom(int offset, bool forward) {
         return;
     }
     m_target->setSelection(rangeOf(m_matches.at(index).start, m_matches.at(index).end));
+    revealSelection();
     showCount();
 }
 
 void FindBarWidget::step(bool forward) {
     if (!m_target) return;
-    if (!isVisible()) {
+    if (!m_open) {
         open(false);
         return;
     }
@@ -541,6 +662,7 @@ void FindBarWidget::excludeCurrent() {
     // The match that came next, or the last one.
     const Match& next = m_matches.at(std::min(index, int(m_matches.size()) - 1));
     m_target->setSelection(rangeOf(next.start, next.end));
+    revealSelection();
     showCount();
 }
 
@@ -634,6 +756,11 @@ QString FindBarWidget::expand(const QString& replacement, const QStringList& cap
 }
 
 bool FindBarWidget::eventFilter(QObject* watched, QEvent* event) {
+    if (m_target && watched == m_target->widget()
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+        if (m_open && overlay()) place();
+        return QWidget::eventFilter(watched, event);
+    }
     if (event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Escape) {

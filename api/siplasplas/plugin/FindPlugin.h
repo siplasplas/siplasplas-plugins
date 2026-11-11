@@ -20,6 +20,7 @@
 
 #include "siplasplas/plugin/EditorPlugin.h"
 
+#include <QRect>
 #include <QString>
 #include <QtPlugin>
 
@@ -118,14 +119,52 @@ public:
     virtual void cancelFind() {}
     // The listener is not owned; nullptr removes it.
     virtual void setFindListener(FindTargetListener* listener) { (void)listener; }
+
+    // --- For a bar over the top of the target (FindBarPlacement::Top). ---
+    // Rows as the vertical scroll bar counts them: a wrapped line has several.
+
+    // The height of a row in pixels; 0: the target tells nothing of its rows,
+    // and a bar on top moves the text down instead of covering it.
+    virtual int rowHeight() const { return 0; }
+    // The part of widget() the bar may cover: the text with its margins, not
+    // the scroll bar. Empty: the whole widget.
+    virtual QRect coverableRect() const { return {}; }
+    // Where the first row shown starts, in widget() coordinates.
+    virtual int textTop() const { return 0; }
+    // The row shown at the top, and scrolling to show another one there.
+    virtual int firstVisibleRow() const { return 0; }
+    virtual void setFirstVisibleRow(int row) { (void)row; }
+    // The row of a position.
+    virtual int rowOf(TextPosition position) const
+    {
+        (void)position;
+        return 0;
+    }
+};
+
+// Where the bar is, in the program's layout next to the target.
+enum class FindBarPlacement {
+    // Below the target, the bar's widget in the layout as any other: the
+    // text never moves (the default).
+    Bottom,
+    // Over the top of the target (the program puts the bar's widget just
+    // above it): the bar covers the first rows shown, and when the match is
+    // among the first rows of the text, which cannot scroll further, it
+    // moves the text down instead (its widget then takes the room in the
+    // layout). A target without rows (rowHeight() 0) is always moved down.
+    Top,
 };
 
 class FindBar {
 public:
     virtual ~FindBar() = default;
 
-    // The bar's widget, hidden at first. Deleting it deletes the FindBar.
+    // The bar's widget, hidden at first, for the program's layout: below the
+    // target, or above it for FindBarPlacement::Top. Deleting it deletes the
+    // FindBar.
     virtual QWidget* widget() = 0;
+    // Bottom by default.
+    virtual void setPlacement(FindBarPlacement placement) = 0;
 
     // The target searched (not owned; nullptr: none). A program with tabs
     // gives the current tab's target, and nullptr before that target goes.

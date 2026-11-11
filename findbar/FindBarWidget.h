@@ -5,6 +5,7 @@
 #include "siplasplas/plugin/FindPlugin.h"
 
 #include <QList>
+#include <QPointer>
 #include <QStringList>
 #include <QTimer>
 #include <QWidget>
@@ -14,6 +15,7 @@ class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QToolButton;
+class QVBoxLayout;
 
 namespace spp {
 
@@ -28,6 +30,7 @@ public:
 
     QWidget* widget() override { return this; }
     void setTarget(FindTarget* target) override;
+    void setPlacement(FindBarPlacement placement) override;
     void setEditor(EditorView* editor) override;
     void showFind() override;
     void showReplace() override;
@@ -59,6 +62,17 @@ private:
     void findFinished(FindResult result) override;
 
     bool huge() const { return m_target && m_target->isHuge(); }
+    // Shows or hides the bar (this widget and, on top, its panel).
+    void setOpen(bool open);
+    // On top of the target, with the panel over it.
+    bool overlay() const;
+    // Puts the panel in this widget, or over the top of the target (covering
+    // it, or over this widget taking room above it).
+    void place();
+    void setCovering(bool covering);
+    // On top: the selection (a match) is not left under the bar; among the
+    // first rows of the text, they move down.
+    void revealSelection();
     FindQuery query() const;
     void open(bool replacing);
     void close();
@@ -92,6 +106,12 @@ private:
     int offsetOf(TextPosition position) const;
     int currentMatch() const;
 
+    QPointer<QWidget> m_panel;  // the controls
+    QVBoxLayout* m_slotLayout = nullptr;
+    FindBarPlacement m_placement = FindBarPlacement::Bottom;
+    bool m_open = false;
+    bool m_covering = false;  // on top: over the text, not above it
+    bool m_placing = false;
     QLineEdit* m_find = nullptr;
     QToolButton* m_wrap = nullptr;
     QToolButton* m_matchCase = nullptr;

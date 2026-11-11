@@ -41,6 +41,12 @@ public:
     bool canReplace() const override { return !isReadOnly(); }
     bool isHuge() const override { return false; }
     QString selectedText() const override;
+    int rowHeight() const override;
+    QRect coverableRect() const override;
+    int textTop() const override;
+    int firstVisibleRow() const override;
+    void setFirstVisibleRow(int row) override;
+    int rowOf(TextPosition position) const override;
 
     EditorResult open(const QString& path, const QString& encoding) override;
     EditorResult reopen(const QString& encoding) override;

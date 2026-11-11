@@ -20,6 +20,7 @@
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QScrollBar>
 #include <QTextDocument>
 #include <QToolTip>
 #include <QVBoxLayout>
@@ -286,6 +287,40 @@ void EditorWidget::setScopeHighlights(const QList<TextRange>& ranges)
     for (const TextRange& range : ranges)
         selections.append({{range.start.line, range.start.column}, {range.end.line, range.end.column}, shade, {}, {}});
     m_edit->area()->setExtraSelections(ScopeLayer, selections);
+}
+
+int EditorWidget::rowHeight() const
+{
+    return m_edit->area()->viewportState().lineHeight;
+}
+
+QRect EditorWidget::coverableRect() const
+{
+    // The editor with its gutters; the scroll bar stays usable beside the bar.
+    QRect rect(m_edit->mapTo(this, QPoint()), m_edit->size());
+    const QScrollBar* scrollBar = m_edit->area()->verticalScrollBar();
+    if (scrollBar->isVisible()) rect.setWidth(rect.width() - scrollBar->width());
+    return rect;
+}
+
+int EditorWidget::textTop() const
+{
+    return m_edit->area()->viewport()->mapTo(this, QPoint()).y();
+}
+
+int EditorWidget::firstVisibleRow() const
+{
+    return m_edit->area()->verticalScrollBar()->value();
+}
+
+void EditorWidget::setFirstVisibleRow(int row)
+{
+    m_edit->area()->verticalScrollBar()->setValue(row);
+}
+
+int EditorWidget::rowOf(TextPosition position) const
+{
+    return m_edit->area()->visualRow({position.line, position.column});
 }
 
 bool EditorWidget::replace(const QList<TextReplacement>& replacements, const QString& undoText)

@@ -20,6 +20,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QVBoxLayout>
 #include <QToolButton>
 
 #include <memory>
@@ -406,6 +407,77 @@ TEST(FindBar, ReplaceRowToggle)
     f.bar.showReplace();
     EXPECT_TRUE(row->isHidden());
     EXPECT_TRUE(toggle->isHidden());
+}
+
+TEST(FindBar, OnTopCoversOrMovesTheTextDown)
+{
+    QByteArray text;
+    for (int i = 0; i < 200; ++i) text += i == 0 || i == 120 ? "match here\n" : "line\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("text.txt"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(text);
+    file.close();
+
+    // The bar's widget just above the editor, as the program lays it out.
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    auto* bar = new spp::FindBarWidget;
+    bar->setPlacement(spp::FindBarPlacement::Top);
+    spp::EditorView* view = editorPlugin()->createEditor();
+    layout->addWidget(bar->widget());
+    layout->addWidget(view->widget(), 1);
+    view->open(path);
+    bar->setEditor(view);
+    host.resize(600, 400);
+    host.show();
+    QCoreApplication::processEvents();
+    spp::FindTarget* target = view->findTarget();
+    ASSERT_GT(target->rowHeight(), 0);
+    QLineEdit* find = nullptr;
+    for (auto* edit : host.findChildren<QLineEdit*>())
+        if (edit->placeholderText() == QStringLiteral("Find")) find = edit;
+    ASSERT_NE(find, nullptr);
+    QWidget* panel = find->parentWidget();
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+
+    // At the top of the text the bar takes room above it.
+    bar->showFind();
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(bar->isHidden());
+    EXPECT_EQ(panel->geometry().top(), bar->geometry().top());
+    QCoreApplication::sendEvent(find, &escape);
+    EXPECT_TRUE(panel->isHidden());
+
+    // Scrolled down, it covers the first rows shown.
+    target->setFirstVisibleRow(50);
+    bar->showFind();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(bar->isHidden());
+    EXPECT_FALSE(panel->isHidden());
+    EXPECT_EQ(panel->geometry().top(), view->widget()->geometry().top());
+
+    // A match in the first row of the text: it moves the text down.
+    find->setText(QStringLiteral("match"));
+    emit find->textEdited(find->text());
+    QCoreApplication::processEvents();
+    EXPECT_EQ(target->firstVisibleRow(), 0);
+    EXPECT_FALSE(bar->isHidden());
+
+    // A match further on is not left under the bar, which covers again.
+    bar->findNext();
+    QCoreApplication::processEvents();
+    spp::TextRange range;
+    ASSERT_TRUE(target->selection(&range));
+    EXPECT_EQ(range.start.line, 120);
+    EXPECT_TRUE(bar->isHidden());
+    const int covered = (panel->sizeHint().height() - target->textTop() + target->rowHeight() - 1) / target->rowHeight();
+    EXPECT_GE(target->rowOf(range.start) - target->firstVisibleRow(), covered);
+
+    bar->setEditor(nullptr);
 }
 
 TEST(FindBar, ExpandsReplacements)
